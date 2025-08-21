@@ -1,0 +1,18 @@
+
+<Project>
+	<PropertyGroup>
+    <SolutionDir Condition="'$(SolutionDir)' == ''">$(MSBuildThisFileDirectory)</SolutionDir>
+
+    <!-- Move obj folder (intermediate output) -->
+    <BaseIntermediateOutputPath>$(SolutionDir)artifacts\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+
+    <!-- Move bin folder (build output) -->
+    <BaseOutputPath>$(SolutionDir)artifacts\$(MSBuildProjectName)\bin\</BaseOutputPath>
+
+    <!-- Publish output (from dotnet publish) -->
+    <PublishDir>$(SolutionDir)builds\$(MSBuildProjectName)\</PublishDir>
+
+    <PublishProfile Condition="'$(BuildingInsideVisualStudio)' != 'true' and '$(PublishProfile)' == ''">false</PublishProfile>
+		<RepositoryType>git</RepositoryType>
+	</PropertyGroup>
+</Project>
