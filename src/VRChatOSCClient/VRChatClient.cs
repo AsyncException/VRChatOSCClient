@@ -88,10 +88,6 @@ internal class VRChatClient : IVRChatClient
 
         await _queryService.StopAsync(token).ConfigureAwait(false);
         await _oscCommunicator.StopAsync(token).ConfigureAwait(false);
-
-        if (_oscCommunicator.Connected) {
-            await _oscCommunicator.StopAsync(token).ConfigureAwait(false);
-        }
         
         // Reset the first client task source
         _firstClientTcs.TrySetCanceled(token);
@@ -118,7 +114,7 @@ internal class VRChatClient : IVRChatClient
     /// <param name="token"></param>
     /// <returns></returns>
     private async Task OnAvatarChangedLoad(AvatarChangedMessage message, CancellationToken token) {
-        Dictionary<string, object?> avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port);
+        Dictionary<string, object?> avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
         await _onAvatarChanged.InvokeAsync(avatarParameters, token);
     }
 

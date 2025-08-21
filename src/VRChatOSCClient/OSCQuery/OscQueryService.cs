@@ -77,9 +77,9 @@ internal class OscQueryService
             OSCQueryEndpoint = new(service.Addresses.First(), service.Port)
         };
 
-        LatestClient = service.ServiceId;
-
         await _onVrchatClientFoundEvent.InvokeAsync(connectionInfo);
+
+        LatestClient = service.ServiceId;
     }
 
     public static int GetAvailablePort(ProtocolType type) {
