@@ -7,7 +7,12 @@ namespace VRChatOSCClient;
 
 public interface IVRChatClient {
     event Func<Message, CancellationToken, Task> OnMessageReceived;
-    public Task StartAsync(MessageFilter? messageFilter = default, CancellationToken token = default);
+    event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterReceived;
+    event Func<Dictionary<string, object?>, CancellationToken, Task> OnAvatarChanged;
+    event Func<Task> OnVRChatClientFound;
+
+    public void Start(MessageFilter? messageFilter = default);
+    Task StartAndWaitAsync(MessageFilter? messageFilter = null, CancellationToken token = default);
     public Task StopAsync(CancellationToken token = default);
     void Send(Message message);
     void SendChatMessage(string message, bool bypassKeyboard = true, bool enableNotification = false);
@@ -20,29 +25,39 @@ internal class VRChatClient : IVRChatClient
     private readonly OscQueryService _queryService;
     private readonly OscCommunicator _oscCommunicator;
     private readonly TaskCompletionSource _firstClientTcs;
+    private readonly VRChatDataFetcher _dataFetcher;
 
-    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onMessageReceived.Add(value); remove => _onMessageReceived.Remove(value); }
-    private readonly AsyncEvent<Func<Message, CancellationToken, Task>> _onMessageReceived = new();
+    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _oscCommunicator.OnMessageReceived += value; remove => _oscCommunicator.OnMessageReceived -= value; }
+    public event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterReceived { add => _oscCommunicator.OnParameterChanged += value; remove => _oscCommunicator.OnParameterChanged -= value; }
+
+    public event Func<Dictionary<string, object?>, CancellationToken, Task> OnAvatarChanged { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
+    private readonly AsyncEvent<Func<Dictionary<string, object?>, CancellationToken, Task>> _onAvatarChanged = new();
+
+    public event Func<Task> OnVRChatClientFound { add => _onVRChatClientFound.Add(value); remove => _onVRChatClientFound.Remove(value); }
+    private readonly AsyncEvent<Func<Task>> _onVRChatClientFound = new();
+
 
     private MessageFilter _messageFilter = new();
+    private VRChatConnectionInfo _connectionInfo = new() { SendEndpoint = new(System.Net.IPAddress.Loopback, 0), OSCQueryEndpoint = new(System.Net.IPAddress.Loopback, 0), ReceiveEndpoint = new(System.Net.IPAddress.Loopback, 0) };
 
-    public VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryService, OscCommunicator oscCOmmunicator) {
+    public VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryService, OscCommunicator oscCOmmunicator, VRChatDataFetcher dataFetcher) {
         _logger = logger;
         _queryService = queryService;
         _oscCommunicator = oscCOmmunicator;
         _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _oscCommunicator.OnMessageReceived += ForwardOnMessageReceived;
         _queryService.OnVrchatClientFound += OnVrchatClientFound;
+        _oscCommunicator.OnAvatarChanged += OnAvatarChangedLoad;
+        _dataFetcher = dataFetcher;
     }
 
     /// <summary>
-    /// Starts up the VRChatClient and waits for Vrchat to be found.
+    /// Starts up the VRChatClient
     /// </summary>
     /// <param name="messageFilter"></param>
     /// <param name="token"></param>
     /// <returns></returns>
-    public async Task StartAsync(MessageFilter? messageFilter = default, CancellationToken token = default) {
+    public void Start(MessageFilter? messageFilter = default) {
         _logger.LogInformation("Starting VRChatClient");
         
         if(messageFilter is not null) {
@@ -50,6 +65,16 @@ internal class VRChatClient : IVRChatClient
         }
 
         _queryService.Start();
+    }
+
+    /// <summary>
+    /// Starts the VRChatClient and waits for the game to connect.
+    /// </summary>
+    /// <param name="messageFilter"></param>
+    /// <param name="token"></param>
+    /// <returns></returns>
+    public async Task StartAndWaitAsync(MessageFilter? messageFilter = default, CancellationToken token = default) {
+        Start(messageFilter);
         await Task.Run(async () => await _firstClientTcs.Task, token);
     }
 
@@ -73,22 +98,22 @@ internal class VRChatClient : IVRChatClient
     }
 
     /// <summary>
-    /// Acts as an event forwatder for the OSCCommunicator's OnMessageReceived event.
-    /// </summary>
-    /// <param name="message"></param>
-    /// <param name="token"></param>
-    /// <returns></returns>
-    private async Task ForwardOnMessageReceived(Message message, CancellationToken token) => await _onMessageReceived.InvokeAsync(message, token).ConfigureAwait(false);
-
-    /// <summary>
     /// Called whenever a client is found (first or subsequent).
     /// </summary>
     private async Task OnVrchatClientFound(VRChatConnectionInfo connection) {
-        _logger.LogInformation("Found Vrchat client. Receiving on: {receiveIP}:{receivePort}. Sending on: {sendIP}:{sendPort}", connection.ReceiveEndpoint.Address, connection.ReceiveEndpoint.Port, connection.SendEndpoint.Address, connection.SendEndpoint.Port);
+        _logger.LogInformation("Found Vrchat client. Receiving on: {receiveIP}:{receivePort}. Sending on: {sendIP}:{sendPort}. OSCserver: {oscIP}:{oscPort}", connection.ReceiveEndpoint.Address, connection.ReceiveEndpoint.Port, connection.SendEndpoint.Address, connection.SendEndpoint.Port, connection.OSCQueryEndpoint.Address, connection.OSCQueryEndpoint.Port);
+        _connectionInfo = connection;
 
         await _oscCommunicator.StartAsync(connection, _messageFilter, CancellationToken.None);
         
         _firstClientTcs.TrySetResult();
+
+        await _onVRChatClientFound.InvokeAsync();
+    }
+
+    private async Task OnAvatarChangedLoad(AvatarChangedMessage message, CancellationToken token) {
+        Dictionary<string, object?> avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port);
+        await _onAvatarChanged.InvokeAsync(avatarParameters, token);
     }
 
     /// <summary>

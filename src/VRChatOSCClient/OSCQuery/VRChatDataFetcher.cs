@@ -45,4 +45,37 @@ internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientF
             throw;
         }
     }
+
+    public async Task<Dictionary<string, object?>> GetAvatarParameters(IPAddress address, ushort port) {
+        HttpClient client = _clientFactory.CreateClient(nameof(VRChatDataFetcher));
+        UriBuilder uri = new("http", address.ToString(), port);
+
+        string stringifiedData = await client.GetStringAsync(uri.Uri);
+
+        Dictionary<string, object?> parameters = [];
+        JsonElement data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
+        foreach(JsonProperty element in data.GetProperty("CONTENTS").GetProperty("avatar").GetProperty("CONTENTS").GetProperty("parameters").GetProperty("CONTENTS").EnumerateObject()) {
+            ReadJsonProperty(element, parameters);
+        }
+
+        return parameters;
+    }
+    
+    private void ReadJsonProperty(JsonProperty property, Dictionary<string, object?> parameters) {
+        int access = property.Value.GetProperty("ACCESS").GetInt32();
+        if(access == 3) {
+            parameters.Add(property.Name, property.Value.GetProperty("TYPE").GetString() switch {
+                "T" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetBoolean(),
+                "f" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetSingle(),
+                "i" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetInt32(),
+                "s" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetString(),
+                _ => null
+            });
+        }
+        else if(access == 0) {
+            foreach(JsonProperty subProperty in property.Value.GetProperty("CONTENTS").EnumerateObject()) {
+                ReadJsonProperty(subProperty, parameters);
+            }
+        }
+    }
 }

@@ -17,7 +17,13 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     private MessageFilter _messageFilter = new();
     public bool Connected { get; private set; } = false;
 
-    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onMessageReceived.Add(value); remove => _onMessageReceived.Remove(value); }
+    public event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterChanged { add => _onParameterChanged.Add(value); remove => _onParameterChanged.Remove(value); }
+    private readonly AsyncEvent<Func<ParameterChangedMessage, CancellationToken, Task>> _onParameterChanged = new();
+
+    public event Func<AvatarChangedMessage, CancellationToken, Task> OnAvatarChanged { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
+    private readonly AsyncEvent<Func<AvatarChangedMessage, CancellationToken, Task>> _onAvatarChanged = new();
+
+    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
     private readonly AsyncEvent<Func<Message, CancellationToken, Task>> _onMessageReceived = new();
 
     public async Task StartAsync(VRChatConnectionInfo connectionInfo, MessageFilter messageFilter, CancellationToken token) {
@@ -48,7 +54,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             throw;
         }
 
-        if (_messageFilter.ReceiveMessages || _messageFilter.ReceiveParameterChanges) {
+        if (!_messageFilter.DisableReceiving) {
             _backgroundTask = StartReceivingAsync();
         }
 
@@ -90,6 +96,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             try {
                 _ = await _receiverSocket.ReceiveAsync(buffer, _cancellationTokenSource.Token).ConfigureAwait(false);
                 Message message = MessageParser.Parse(buffer);
+                _logger.LogTrace("Received message: {address}. {value}.", message.Address, message.Arguments[0]);
 
                 if (!_messageFilter.IsAddressPatternMatch(message)) {
                     continue;
@@ -97,16 +104,20 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
 
                 if (message.Address.StartsWith(ParameterChangedMessage.PARAMETER_CHANGED_ADDRESS)) {
                     ParameterChangedMessage parameterMessage = new(message);
-                    if (_messageFilter.ReceiveParameterChanges && _messageFilter.IsParameterPatternMatch(parameterMessage)) {
-                        await _onMessageReceived.InvokeAsync(parameterMessage, _cancellationTokenSource.Token).ConfigureAwait(false);
+                    if (_messageFilter.IsParameterPatternMatch(parameterMessage)) {
+                        await _onParameterChanged.InvokeAsync(parameterMessage, _cancellationTokenSource.Token).ConfigureAwait(false);
                     }
 
                     continue;
                 }
 
-                if (_messageFilter.ReceiveMessages) {
-                    await _onMessageReceived.InvokeAsync(message, _cancellationTokenSource.Token).ConfigureAwait(false);
+                if (message.Address.StartsWith(AvatarChangedMessage.AVATAR_CHANGED_ADDRESS)) {
+                    AvatarChangedMessage avatarMessage = new(message);
+                    await _onAvatarChanged.InvokeAsync(avatarMessage, _cancellationTokenSource.Token).ConfigureAwait(false);
+                    continue;
                 }
+
+                await _onMessageReceived.InvokeAsync(message, _cancellationTokenSource.Token).ConfigureAwait(false);
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "Exception occured while receiving and parsing message");

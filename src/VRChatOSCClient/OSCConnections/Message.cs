@@ -15,3 +15,8 @@ public record ChatMessage(string Message, bool BypassKeyboard, bool PlayNotifica
     public const string MESSAGE_BOX_ADDRESS = "/chatbox/input";
     public ChatMessage(string Message, bool BypassKeyboard = true, bool PlayNotification = false) : this(Message, BypassKeyboard, PlayNotification, MESSAGE_BOX_ADDRESS, [Message, BypassKeyboard, PlayNotification]) {}
 }
+
+public record AvatarChangedMessage(string AvatarId, string Address, object?[] Arguments) : Message(Address, Arguments) {
+    public const string AVATAR_CHANGED_ADDRESS = "/avatar/change";
+    public AvatarChangedMessage(Message message) : this((string)(message.Arguments[0] ?? string.Empty), message.Address, message.Arguments) { }
+}

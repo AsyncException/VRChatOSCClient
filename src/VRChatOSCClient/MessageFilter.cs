@@ -9,12 +9,8 @@ public class MessageFilter
     /// <summary>
     /// Gets or sets a value indicating whether the system should receive all messages.
     /// </summary>
-    public bool ReceiveMessages { get; set; } = true;
+    public bool DisableReceiving { get; set; } = false;
 
-    /// <summary>
-    /// Gets or sets a value indicating whether the system should receive parameter changes.
-    /// </summary>
-    public bool ReceiveParameterChanges { get; set; } = true;
 
     public Regex? ParameterPattern { get; private set; } = null;
 
