@@ -111,9 +111,28 @@ internal class VRChatClient : IVRChatClient
         await _onVRChatClientFound.InvokeAsync();
     }
 
+    /// <summary>
+    /// Fetches the avatar parameters when the avatar changes.
+    /// </summary>
+    /// <param name="message"></param>
+    /// <param name="token"></param>
+    /// <returns></returns>
     private async Task OnAvatarChangedLoad(AvatarChangedMessage message, CancellationToken token) {
         Dictionary<string, object?> avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port);
         await _onAvatarChanged.InvokeAsync(avatarParameters, token);
+    }
+
+    /// <summary>
+    /// Fetches the avatars parameters from the VRChat client. 
+    /// </summary>
+    /// <param name="token"></param>
+    /// <returns></returns>
+    public async Task<Dictionary<string, object?>> GetAvatarParametersAsync(CancellationToken token = default) {
+        if (_connectionInfo.OSCQueryEndpoint.Port == 0) {
+            return [];
+        }
+
+        return await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
     }
 
     /// <summary>

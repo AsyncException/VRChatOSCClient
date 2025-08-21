@@ -46,11 +46,11 @@ internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientF
         }
     }
 
-    public async Task<Dictionary<string, object?>> GetAvatarParameters(IPAddress address, ushort port) {
+    public async Task<Dictionary<string, object?>> GetAvatarParameters(IPAddress address, ushort port, CancellationToken token) {
         HttpClient client = _clientFactory.CreateClient(nameof(VRChatDataFetcher));
         UriBuilder uri = new("http", address.ToString(), port);
 
-        string stringifiedData = await client.GetStringAsync(uri.Uri);
+        string stringifiedData = await client.GetStringAsync(uri.Uri, token);
 
         Dictionary<string, object?> parameters = [];
         JsonElement data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
@@ -61,7 +61,7 @@ internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientF
         return parameters;
     }
     
-    private void ReadJsonProperty(JsonProperty property, Dictionary<string, object?> parameters) {
+    private static void ReadJsonProperty(JsonProperty property, Dictionary<string, object?> parameters) {
         int access = property.Value.GetProperty("ACCESS").GetInt32();
         if(access == 3) {
             parameters.Add(property.Name, property.Value.GetProperty("TYPE").GetString() switch {
