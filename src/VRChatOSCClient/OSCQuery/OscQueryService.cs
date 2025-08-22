@@ -27,8 +27,8 @@ internal class OscQueryService
     private string LatestClient { get; set; } = string.Empty;
 
 
-    public event Func<VRChatConnectionInfo, Task> OnVrchatClientFound { add => _onVrchatClientFoundEvent.Add(value); remove => _onVrchatClientFoundEvent.Remove(value); }
-    private readonly AsyncEvent<Func<VRChatConnectionInfo, Task>> _onVrchatClientFoundEvent = new();
+    public event Func<VRChatConnectionInfo, CancellationToken, Task> OnVrchatClientFound { add => _onVrchatClientFoundEvent.Add(value); remove => _onVrchatClientFoundEvent.Remove(value); }
+    private readonly AsyncEvent<Func<VRChatConnectionInfo, CancellationToken, Task>> _onVrchatClientFoundEvent = new();
 
     public OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServer httpServer, Multicaster multicaster, Settings settings, VRChatDataFetcher dataFetcher) {
         _logger = logger;
@@ -45,7 +45,7 @@ internal class OscQueryService
         HostInfo = new(_settings.ServiceName, _settings.Address, OscReceivePort);
     }
 
-    public void Start() {
+    public void Start(CancellationToken token) {
         _logger.LogInformation("Starting OscQueryService");
 
         _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, hasHostInfo => hasHostInfo ? HostInfo.ToString() : OscInfo.ToJson());
@@ -53,7 +53,7 @@ internal class OscQueryService
         ServiceProfile httpProfile = new(_settings.ServiceName, "_oscjson._tcp", (ushort)HttpPort, [_settings.Address]);
         ServiceProfile oscProfile = new(_settings.ServiceName, "_osc._udp", (ushort)OscReceivePort, [_settings.Address]);
 
-        _multicaster.Start(httpProfile, oscProfile);
+        _multicaster.Start(token, httpProfile, oscProfile);
     }
 
     public async Task StopAsync(CancellationToken token = default) {
@@ -66,7 +66,7 @@ internal class OscQueryService
         LatestClient = string.Empty;
     }
 
-    private async Task ServiceFound(AnnouncedService service) {
+    private async Task ServiceFound(AnnouncedService service, CancellationToken token) {
         if (service.Type != "_tcp" || !service.ServiceName.StartsWith("VRChat-Client-") || LatestClient.Equals(service.ServiceId)) {
             return;
         }
@@ -77,7 +77,7 @@ internal class OscQueryService
             OSCQueryEndpoint = new(service.Addresses.First(), service.Port)
         };
 
-        await _onVrchatClientFoundEvent.InvokeAsync(connectionInfo);
+        await _onVrchatClientFoundEvent.InvokeAsync(connectionInfo, token);
 
         LatestClient = service.ServiceId;
     }
