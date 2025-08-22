@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Logging;
+using System;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Channels;
 using VRChatOSCClient.OSCQuery;
 using VRChatOSCClient.TaskExtensions;
 
@@ -15,7 +17,8 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     private Socket? _receiverSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
     private CancellationTokenSource _cancellationTokenSource = new();
-    private Task? _backgroundTask;
+    private Task? _receiverTask;
+    private Task? _dequeueTask;
     private MessageFilter _messageFilter = new();
 
     public event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterChanged { add => _onParameterChanged.Add(value); remove => _onParameterChanged.Remove(value); }
@@ -27,6 +30,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
     private readonly AsyncEvent<Func<Message, CancellationToken, Task>> _onMessageReceived = new();
 
+    private readonly Channel<Message> _messageChannel = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly SemaphoreSlim _semaphore = new(1);
 
     public async Task StartAsync(VRChatConnectionInfo connectionInfo, MessageFilter messageFilter, CancellationToken token) {
@@ -64,7 +68,8 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
 
         if (!_messageFilter.DisableReceiving) {
-            _backgroundTask = StartReceivingAsync();
+            _receiverTask = StartReceivingAsync();
+            _dequeueTask = StartDequeue();
         }
 
         _semaphore.Release();
@@ -80,9 +85,14 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         _logger.LogInformation("Stopping OSCCommunicator");
 
         await _cancellationTokenSource.CancelAsync();
-        if (_backgroundTask is not null) {
-            await _backgroundTask.ConfigureAwait(false);
-            _backgroundTask = Task.CompletedTask;
+        if (_receiverTask is not null) {
+            await _receiverTask.ConfigureAwait(false);
+            _receiverTask = Task.CompletedTask;
+        }
+
+        if (_dequeueTask is not null) {
+            await _dequeueTask.ConfigureAwait(false);
+            _dequeueTask = Task.CompletedTask;
         }
 
         try {
@@ -107,13 +117,12 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         _semaphore.Release();
     }
 
-    public async Task StartReceivingAsync() {
-        Memory<byte> buffer = new byte[4096];
+    public async Task StartDequeue() {
         while (!_cancellationTokenSource.IsCancellationRequested) {
             try {
-                _ = await _receiverSocket!.ReceiveAsync(buffer, _cancellationTokenSource.Token).ConfigureAwait(false);
-                Message message = MessageParser.Parse(buffer);
-                _logger.LogTrace("Received message: {address}. {value}.", message.Address, message.Arguments[0]);
+
+                Message message = await _messageChannel.Reader.ReadAsync(_cancellationTokenSource.Token).ConfigureAwait(false);
+                _logger.LogTrace("Received message: {address}: {value}.", message.Address, message.Arguments[0]);
 
                 if (!_messageFilter.IsAddressPatternMatch(message)) {
                     continue;
@@ -135,6 +144,20 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 }
 
                 await _onMessageReceived.InvokeAsync(message, _cancellationTokenSource.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Exception occured while receiving and parsing message");
+            }
+        }
+    }
+
+    public async Task StartReceivingAsync() {
+        Memory<byte> buffer = new byte[4096];
+        while (!_cancellationTokenSource.IsCancellationRequested) {
+            try {
+                _ = await _receiverSocket!.ReceiveAsync(buffer, _cancellationTokenSource.Token).ConfigureAwait(false);
+                Message message = MessageParser.Parse(buffer);
+                await _messageChannel.Writer.WriteAsync(message);
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "Exception occured while receiving and parsing message");
