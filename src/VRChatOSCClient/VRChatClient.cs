@@ -9,9 +9,9 @@ public interface IVRChatClient {
     event Func<Message, CancellationToken, Task> OnMessageReceived;
     event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterReceived;
     event Func<Dictionary<string, object?>, CancellationToken, Task> OnAvatarChanged;
-    event Func<Task> OnVRChatClientFound;
+    event Func<VRChatConnectionInfo, CancellationToken, Task> OnVRChatClientFound;
 
-    public void Start(MessageFilter? messageFilter = default);
+    public void Start(MessageFilter? messageFilter = default, CancellationToken token = default);
     Task StartAndWaitAsync(MessageFilter? messageFilter = null, CancellationToken token = default);
     public Task StopAsync(CancellationToken token = default);
     void Send(Message message);
@@ -33,8 +33,8 @@ internal class VRChatClient : IVRChatClient
     public event Func<Dictionary<string, object?>, CancellationToken, Task> OnAvatarChanged { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
     private readonly AsyncEvent<Func<Dictionary<string, object?>, CancellationToken, Task>> _onAvatarChanged = new();
 
-    public event Func<Task> OnVRChatClientFound { add => _onVRChatClientFound.Add(value); remove => _onVRChatClientFound.Remove(value); }
-    private readonly AsyncEvent<Func<Task>> _onVRChatClientFound = new();
+    public event Func<VRChatConnectionInfo, CancellationToken, Task> OnVRChatClientFound { add => _onVRChatClientFound.Add(value); remove => _onVRChatClientFound.Remove(value); }
+    private readonly AsyncEvent<Func<VRChatConnectionInfo, CancellationToken, Task>> _onVRChatClientFound = new();
 
 
     private MessageFilter _messageFilter = new();
@@ -57,14 +57,14 @@ internal class VRChatClient : IVRChatClient
     /// <param name="messageFilter"></param>
     /// <param name="token"></param>
     /// <returns></returns>
-    public void Start(MessageFilter? messageFilter = default) {
+    public void Start(MessageFilter? messageFilter = default, CancellationToken token = default) {
         _logger.LogInformation("Starting VRChatClient");
         
         if(messageFilter is not null) {
             _messageFilter = messageFilter;
         }
 
-        _queryService.Start();
+        _queryService.Start(token);
     }
 
     /// <summary>
@@ -74,7 +74,7 @@ internal class VRChatClient : IVRChatClient
     /// <param name="token"></param>
     /// <returns></returns>
     public async Task StartAndWaitAsync(MessageFilter? messageFilter = default, CancellationToken token = default) {
-        Start(messageFilter);
+        Start(messageFilter, token);
         await Task.Run(async () => await _firstClientTcs.Task, token);
     }
 
@@ -96,7 +96,7 @@ internal class VRChatClient : IVRChatClient
     /// <summary>
     /// Called whenever a client is found (first or subsequent).
     /// </summary>
-    private async Task OnVrchatClientFound(VRChatConnectionInfo connection) {
+    private async Task OnVrchatClientFound(VRChatConnectionInfo connection, CancellationToken token) {
         _logger.LogInformation("Found Vrchat client. Receiving on: {receiveIP}:{receivePort}. Sending on: {sendIP}:{sendPort}. OSCserver: {oscIP}:{oscPort}", connection.ReceiveEndpoint.Address, connection.ReceiveEndpoint.Port, connection.SendEndpoint.Address, connection.SendEndpoint.Port, connection.OSCQueryEndpoint.Address, connection.OSCQueryEndpoint.Port);
         _connectionInfo = connection;
 
@@ -104,7 +104,7 @@ internal class VRChatClient : IVRChatClient
         
         _firstClientTcs.TrySetResult();
 
-        await _onVRChatClientFound.InvokeAsync();
+        await _onVRChatClientFound.InvokeAsync(connection, token);
     }
 
     /// <summary>
@@ -124,11 +124,9 @@ internal class VRChatClient : IVRChatClient
     /// <param name="token"></param>
     /// <returns></returns>
     public async Task<Dictionary<string, object?>> GetAvatarParametersAsync(CancellationToken token = default) {
-        if (_connectionInfo.OSCQueryEndpoint.Port == 0) {
-            return [];
-        }
-
-        return await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
+        return _connectionInfo.OSCQueryEndpoint.Port == 0
+            ? []
+            : await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
     }
 
     /// <summary>

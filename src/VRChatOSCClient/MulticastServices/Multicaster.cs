@@ -13,8 +13,10 @@ internal class Multicaster
     private readonly ServiceDiscovery _serviceDiscovery;
     private ServiceProfile[] _profiles = [];
 
-    public event Func<AnnouncedService, Task> ServiceAnswerd { add => _serviceAnswerdEvent.Add(value); remove => _serviceAnswerdEvent.Remove(value); }
-    private readonly AsyncEvent<Func<AnnouncedService, Task>> _serviceAnswerdEvent = new();
+    public event Func<AnnouncedService, CancellationToken, Task> ServiceAnswerd { add => _serviceAnswerdEvent.Add(value); remove => _serviceAnswerdEvent.Remove(value); }
+    private readonly AsyncEvent<Func<AnnouncedService, CancellationToken, Task>> _serviceAnswerdEvent = new();
+
+    private CancellationToken _token = CancellationToken.None;
 
     public Multicaster(ILogger<Multicaster> logger) {
         _logger = logger;
@@ -25,7 +27,8 @@ internal class Multicaster
         _multicastService.AnswerReceived += AnswerReceived;
     }
 
-    public void Start(params ServiceProfile[] serviceProfiles) {
+    public void Start(CancellationToken token, params ServiceProfile[] serviceProfiles) {
+        _token = token;
         _logger.LogInformation("Multicaster starting");
         _profiles = serviceProfiles;
         _multicastService.Start();
@@ -70,7 +73,7 @@ internal class Multicaster
             _logger.LogDebug("Service located at: {address}:{port} as {serviceId} {instanceName}", string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
 
             try {
-                await _serviceAnswerdEvent.InvokeAsync(srvs);
+                await _serviceAnswerdEvent.InvokeAsync(srvs, _token);
             }
             catch (Exception ex) { _logger.LogError(ex, "Could not handle ServiceAnsweredEvent"); }
         }
