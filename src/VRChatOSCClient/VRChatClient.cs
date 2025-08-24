@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using System.Net;
 using VRChatOSCClient.OSCConnections;
 using VRChatOSCClient.OSCQuery;
 using VRChatOSCClient.TaskExtensions;
@@ -12,6 +13,7 @@ public interface IVRChatClient {
     event Func<VRChatConnectionInfo, CancellationToken, Task> OnVRChatClientFound;
 
     public void Start(MessageFilter? messageFilter = default, CancellationToken token = default);
+    Task Start(IPEndPoint sendEndpoint, IPEndPoint receiveEndpoint, MessageFilter? messageFilter, CancellationToken token);
     Task StartAndWaitAsync(MessageFilter? messageFilter = null, CancellationToken token = default);
     public Task StopAsync(CancellationToken token = default);
     void Send(Message message);
@@ -68,14 +70,34 @@ internal class VRChatClient : IVRChatClient
     }
 
     /// <summary>
+    /// Starts the VRChatClient with specified endpoints. This will bypass the OSCQuery service.
+    /// </summary>
+    /// <param name="sendEndpoint"></param>
+    /// <param name="receiveEndpoint"></param>
+    /// <param name="messageFilter"></param>
+    public async Task Start(IPEndPoint sendEndpoint, IPEndPoint receiveEndpoint, MessageFilter? messageFilter, CancellationToken token) {
+        VRChatConnectionInfo connection = new() {
+            SendEndpoint = sendEndpoint,
+            ReceiveEndpoint = receiveEndpoint,
+            OSCQueryEndpoint = new(IPAddress.Loopback, 0)
+        };
+
+        await _oscCommunicator.StartAsync(connection, messageFilter ?? new(), token);
+        await _onVRChatClientFound.InvokeAsync(connection, token);
+    }
+
+    /// <summary>
     /// Starts the VRChatClient and waits for the game to connect.
     /// </summary>
     /// <param name="messageFilter"></param>
     /// <param name="token"></param>
     /// <returns></returns>
     public async Task StartAndWaitAsync(MessageFilter? messageFilter = default, CancellationToken token = default) {
-        Start(messageFilter, token);
-        await Task.Run(async () => await _firstClientTcs.Task, token);
+        try {
+            Start(messageFilter, token);
+            await Task.Run(async () => await _firstClientTcs.Task, token);
+        }
+        catch (TaskCanceledException) { }
     }
 
     /// <summary>
@@ -123,7 +145,7 @@ internal class VRChatClient : IVRChatClient
     /// </summary>
     /// <param name="token"></param>
     /// <returns></returns>
-    public async Task<Dictionary<string, object?>> GetAvatarParametersAsync(CancellationToken token = default) {
+    public async Task<Dictionary<string, object?>> GetAvatarParametersAsync(CancellationToken token) {
         return _connectionInfo.OSCQueryEndpoint.Port == 0
             ? []
             : await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);

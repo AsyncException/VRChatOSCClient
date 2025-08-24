@@ -48,7 +48,7 @@ internal class OscQueryService
     public void Start(CancellationToken token) {
         _logger.LogInformation("Starting OscQueryService");
 
-        _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, hasHostInfo => hasHostInfo ? HostInfo.ToString() : OscInfo.ToJson());
+        _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, hasHostInfo => hasHostInfo ? HostInfo.ToString() : OscInfo.ToJson(), token);
 
         ServiceProfile httpProfile = new(_settings.ServiceName, "_oscjson._tcp", (ushort)HttpPort, [_settings.Address]);
         ServiceProfile oscProfile = new(_settings.ServiceName, "_osc._udp", (ushort)OscReceivePort, [_settings.Address]);

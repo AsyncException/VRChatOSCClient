@@ -8,12 +8,11 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
 {
     private readonly ILogger<HostInfoHttpServer> _logger = logger;
 
-    private HttpListener _listener = null!;
+    private HttpListener? _listener = null!;
     private Func<bool, string> _responseProvider = null!;
-    private CancellationTokenSource _cts = null!;
     private Task? _serverTask;
 
-    public void Start(string binding, ushort port, Func<bool, string> responseProvider) {
+    public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
         _logger.LogInformation("HostInfoHttpServer starting");
         string prefix = $"http://{binding}:{port}/";
 
@@ -21,19 +20,14 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
         _listener.Prefixes.Add(prefix);
         _responseProvider = responseProvider ?? throw new ArgumentNullException(nameof(responseProvider));
 
-        if (_cts is null ||  _cts.IsCancellationRequested) {
-            _cts = new();
-        }
-
         _listener.Start();
-        _serverTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+        _serverTask = ListenLoopAsync(token);
     }
 
     public async Task StopAsync(CancellationToken token = default) {
-        _cts.Cancel();
-        _listener.Stop();
+        _listener?.Stop();
         if (_serverTask != null) {
-            await Task.Run(async () => await _serverTask.ConfigureAwait(false), token);
+            await _serverTask.WaitAsync(token).ConfigureAwait(false);
         }
 
         _listener = null!;
@@ -49,15 +43,19 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     private async Task ListenLoopAsync(CancellationToken ct) {
         try {
             while (!ct.IsCancellationRequested) {
-                HttpListenerContext ctx;
+                HttpListenerContext? ctx = null;
                 try {
-                    ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+                    if(_listener is not null) {
+                        ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+                    }
                 }
                 catch(Exception ex) when (ex is HttpListenerException or ObjectDisposedException && ct.IsCancellationRequested) {
                     break;
                 }
 
-                _ = Task.Run(() => HandleContextAsync(ctx), ct);
+                if(ctx is not null) {
+                    _ = HandleContextAsync(ctx, ct);
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -70,7 +68,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// </summary>
     /// <param name="ctx"></param>
     /// <returns></returns>
-    private async Task HandleContextAsync(HttpListenerContext ctx) {
+    private async Task HandleContextAsync(HttpListenerContext ctx, CancellationToken token) {
         HttpListenerRequest req = ctx.Request;
         HttpListenerResponse res = ctx.Response;
 
@@ -97,7 +95,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
             res.ContentLength64 = buffer.Length;
 
             // Write body
-            await res.OutputStream.WriteAsync(buffer).ConfigureAwait(false);
+            await res.OutputStream.WriteAsync(buffer, token).ConfigureAwait(false);
             res.Close();
         }
         catch (Exception ex) {
@@ -113,9 +111,6 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
 
     public void Dispose() {
         GC.SuppressFinalize(this);
-
-        _cts.Cancel();
-        try { _listener.Close(); } catch { }
-        _cts.Dispose();
+        try { _listener?.Close(); } catch { }
     }
 }
