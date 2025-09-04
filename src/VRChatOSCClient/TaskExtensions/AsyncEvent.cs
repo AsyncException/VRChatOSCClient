@@ -27,24 +27,33 @@ internal static class AsyncEventExtensions
 {
     public static async Task InvokeAsync(this AsyncEvent<Func<Task>> eventHandler) {
         IReadOnlyList<Func<Task>> subscribers = eventHandler.Subscriptions;
+        Task[] tasks = new Task[subscribers.Count];
 
         for (int i = 0; i < subscribers.Count; i++) {
-            await subscribers[i].Invoke().ConfigureAwait(false);
+            tasks[i] = subscribers[i].Invoke();
         }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
     public static async Task InvokeAsync<T>(this AsyncEvent<Func<T, Task>> eventHandler, T arg) {
         IReadOnlyList<Func<T, Task>> subscribers = eventHandler.Subscriptions;
+        Task[] tasks = new Task[subscribers.Count];
 
         for (int i = 0; i < subscribers.Count; i++) {
-            await subscribers[i].Invoke(arg).ConfigureAwait(false);
+            tasks[i] = subscribers[i].Invoke(arg);
         }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     public static async Task InvokeAsync<T1, T2>(this AsyncEvent<Func<T1, T2, Task>> eventHandler, T1 arg1, T2 arg2) {
         IReadOnlyList<Func<T1, T2, Task>> subscribers = eventHandler.Subscriptions;
+        Task[] tasks = new Task[subscribers.Count];
 
         for (int i = 0; i < subscribers.Count; i++) {
-            await subscribers[i].Invoke(arg1, arg2).ConfigureAwait(false);
+            tasks[i] = subscribers[i].Invoke(arg1, arg2);
         }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 }
