@@ -2,13 +2,14 @@
 using System.Net;
 using VRChatOSCClient.HttpServer;
 using VRChatOSCClient.MulticastServices;
+using VRChatOSCClient.OpenVR;
 using VRChatOSCClient.OSCConnections;
 using VRChatOSCClient.OSCQuery;
 
 namespace VRChatOSCClient;
 public static class VRChatClientServicesExtension
 {
-    public static IServiceCollection AddVRChatClient(this IServiceCollection services, string serviceName, IPAddress address, ServiceLifetime lifetime = ServiceLifetime.Singleton) {
+    public static IServiceCollection AddVRChatClient(this IServiceCollection services, string serviceName, IPAddress address, bool addOpenVR = false, ServiceLifetime lifetime = ServiceLifetime.Singleton) {
         services.AddTransient<Settings>(_ => new Settings() { ServiceName = serviceName, Address = address });
         services.AddHttpClient(nameof(VRChatDataFetcher), client => VRChatDataFetcher.ConfigureHTTPClient(client, serviceName));
         services.AddTransient<OscQueryService>();
@@ -17,6 +18,11 @@ public static class VRChatClientServicesExtension
         services.AddTransient<Multicaster>();
         services.AddTransient<OscCommunicator>();
         services.Add(new ServiceDescriptor(typeof(IVRChatClient), typeof(VRChatClient), lifetime));
+
+        if (addOpenVR) {
+            services.AddSingleton<OpenVRWrapper>();
+        }
+
         return services;
     }
 }
