@@ -4,6 +4,14 @@
 // This file is auto-generated, do not edit it.
 //
 //=============================================================================
+
+#pragma warning disable CS8605 // Unboxing a possibly null value.
+#pragma warning disable CS8603 // Possible null reference return.
+#pragma warning disable IDE0021 // Use expression body for constructor
+#pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type.
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
 #if !OPENVR_XR_API
 
 using System;
