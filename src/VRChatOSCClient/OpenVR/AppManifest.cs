@@ -8,12 +8,14 @@ public record AppManifest(
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("applications")] IReadOnlyList<Application> Applications
 ) {
-    public void WriteToFile(string directoryPath) {
+    public void WriteToFile(string path) {
+        string filePath = path.EndsWith("app.vrmanifest") ? path : Path.Combine(path, "app.vrmanifest");
+        string directoryPath = path.EndsWith("app.vrmanifest") ? Path.GetDirectoryName(path)! : path;
+
         if (!Directory.Exists(directoryPath)) {
             Directory.CreateDirectory(directoryPath);
         }
 
-        string filePath = Path.Combine(directoryPath, "app.vrmanifest");
         using FileStream stream = File.OpenWrite(filePath);
         JsonSerializer.Serialize(stream, this, AppManifestTypeInfo.Default.AppManifest);
     }
@@ -40,6 +42,7 @@ public record Strings(
 [JsonSerializable(typeof(Application))]
 [JsonSerializable(typeof(EnUs))]
 [JsonSerializable(typeof(Strings))]
+[JsonSourceGenerationOptions(WriteIndented = true)]
 internal partial class AppManifestTypeInfo : JsonSerializerContext;
 
 public class AppManifestBuilder {

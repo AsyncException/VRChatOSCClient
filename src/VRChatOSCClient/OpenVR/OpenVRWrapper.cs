@@ -15,14 +15,18 @@ public class OpenVRWrapper
     private readonly AppManifest _appManifest;
     private readonly ILogger<OpenVRWrapper> _logger;
     private readonly IOptions<OpenVRWrapperSettings>? _options;
+    private readonly TaskCompletionSource _firstClientTcs;
 
     public event Func<VREvent_t, CancellationToken, Task> OnEventReceived { add => _onEventReceived.Add(value); remove => _onEventReceived.Remove(value); }
     private readonly AsyncEvent<Func<VREvent_t, CancellationToken, Task>> _onEventReceived = new();
 
+    public event Func<CancellationToken, Task> OnSteamVRFound { add => _onSteamVRFound.Add(value); remove => _onSteamVRFound.Remove(value); }
+    private readonly AsyncEvent<Func<CancellationToken, Task>> _onSteamVRFound = new();
+
     private readonly Channel<VREvent_t> _eventChannel = Channel.CreateUnbounded<VREvent_t>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
-    public CVRApplications Applications { get; init; }
-    public CVRSystem System { get; init; }
+    public CVRApplications Applications => Valve.VR.OpenVR.Applications;
+    public CVRSystem System => Valve.VR.OpenVR.System;
     public bool AutoLaunch { get => Applications.GetApplicationAutoLaunch(_appId); set => Applications.SetApplicationAutoLaunch(_appId, value); }
 
     private CancellationTokenSource _cancellationTokenSource = new();
@@ -34,40 +38,71 @@ public class OpenVRWrapper
         _options = options;
         _appManifestPath = ValidateManifestPath(options);
 
-        EVRInitError err = EVRInitError.None;
-        Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
-
-        if (err != EVRInitError.None) {
-            _logger.LogError("Error occured while initializing OpenVR, error: {error}", err);
-            throw new Exception($"Error occured while initializing OpenVR, error: {err}");
-        }
+        _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _appManifest = GetAppManifest(_appManifestPath);
 
         _appId = _appManifest.Applications.Count > 0 ? _appManifest.Applications[0].AppKey : throw new Exception("Manifest dos not contain any applications");
+    }
 
-        Applications = Valve.VR.OpenVR.Applications;
-        System = Valve.VR.OpenVR.System;
+    public void Start() {
+        _ = Task.Run(async () => await InternalStart(CancellationToken.None));
+    }
+
+    public async Task StartAndWaitAsync(CancellationToken token = default) {
+        await InternalStart(CancellationToken.None);
+    }
+
+    private async Task InternalStart(CancellationToken token) {
+        while(!token.IsCancellationRequested) {
+            EVRInitError err = EVRInitError.None;
+            Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
+            
+            if(err == EVRInitError.None) {
+                break; //successful start
+            }
+
+            if(err != EVRInitError.Init_NoServerForBackgroundApp) {
+                _logger.LogError("Error occured while initializing OpenVR, error: {error}", err);
+                throw new OpenVRException("Error occured while initializing OpenVR`", err);
+            }
+
+            await Task.Delay(1000, token);
+        }
 
         ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
+        _eventReceiverTask = Task.Run(StartReceivingAsync);
+        _dequeueTask = Task.Run(StartDequeueAsync);
 
-        _eventReceiverTask = StartReceivingAsync();
-        _dequeueTask = StartDequeueAsync();
+        await _onSteamVRFound.InvokeAsync(token);
     }
     
     private async Task StartReceivingAsync() {
-        while (!_cancellationTokenSource.IsCancellationRequested) {
-            VREvent_t vrevent = new();
-            while(Valve.VR.OpenVR.System.PollNextEvent(ref vrevent, (uint)Marshal.SizeOf(vrevent)) && !_cancellationTokenSource.IsCancellationRequested) {
-                await _eventChannel.Writer.WriteAsync(vrevent);
+        try {
+            while (!_cancellationTokenSource.IsCancellationRequested) {
+                VREvent_t vrevent = new();
+                while (Valve.VR.OpenVR.System.PollNextEvent(ref vrevent, (uint)Marshal.SizeOf(vrevent)) && !_cancellationTokenSource.IsCancellationRequested) {
+                    await _eventChannel.Writer.WriteAsync(vrevent);
+                }
             }
         }
+        catch(Exception e) {
+            _logger.LogError(e, "Error occurred while receiving SteamVR events");
+            throw;
+        }
+        
     }
 
     private async Task StartDequeueAsync() {
-        while (!_cancellationTokenSource.IsCancellationRequested) {
-            VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
-            await _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token);
+        try {
+            while (!_cancellationTokenSource.IsCancellationRequested) {
+                VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
+                await _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token);
+            }
+        }
+        catch (Exception e) {
+            _logger.LogError(e, "Error occurred while dequeueing SteamVR events");
+            throw;
         }
     }
 
@@ -81,14 +116,14 @@ public class OpenVRWrapper
             throw new Exception("Manifest path was empty");
         }
 
-        if (Path.HasExtension(appManifestPath)) {
-            appManifestPath = Path.GetDirectoryName(appManifestPath) ?? throw new Exception("Couldnt get directory for the manifest");
+        if (!Path.HasExtension(appManifestPath)) {
+            appManifestPath = Path.Combine(appManifestPath, "app.vrmanifest");
         }
 
         return appManifestPath;
     }
     private static AppManifest GetAppManifest(string appManifestPath) {
-        using FileStream stream = File.OpenRead(Path.Combine(appManifestPath, "app.vrmanifest"));
+        using FileStream stream = File.OpenRead(appManifestPath);
         return JsonSerializer.Deserialize(stream, AppManifestTypeInfo.Default.AppManifest) ?? throw new Exception("Could not deserialize app manifest");
     }
     private static void ValidateInstalled(ILogger<OpenVRWrapper> logger, CVRApplications applications, string appId, string appManifestPath) {
@@ -105,4 +140,9 @@ public class OpenVRWrapper
 
 public class OpenVRWrapperSettings {
     public string ManifestPath { get; set; } = string.Empty;
+}
+
+public class OpenVRException(string message, EVRInitError err) : Exception(message)
+{
+    public EVRInitError Error { get; init; } = err;
 }
