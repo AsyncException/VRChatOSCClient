@@ -19,6 +19,18 @@ public record AppManifest(
         using FileStream stream = File.OpenWrite(filePath);
         JsonSerializer.Serialize(stream, this, AppManifestTypeInfo.Default.AppManifest);
     }
+
+    public static AppManifest Create(string souce, string appKey, string launchType, string binaryPathWindows, bool isDashboardOverlay, string name, string description) {
+        return new AppManifestBuilder {
+            Source = souce,
+            AppKey = appKey,
+            LaunchType = launchType,
+            BinaryPathWindows = binaryPathWindows,
+            IsDashboardOverlay = isDashboardOverlay,
+            Name = name,
+            Description = description
+        }.Build();
+    }
 }
 
 public record Application(

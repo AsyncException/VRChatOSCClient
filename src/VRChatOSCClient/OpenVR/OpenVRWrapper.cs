@@ -20,6 +20,9 @@ public class OpenVRWrapper
     public event Func<VREvent_t, CancellationToken, Task> OnEventReceived { add => _onEventReceived.Add(value); remove => _onEventReceived.Remove(value); }
     private readonly AsyncEvent<Func<VREvent_t, CancellationToken, Task>> _onEventReceived = new();
 
+    public event Func<VREvent_t, CancellationToken, Task> OnShutdownReceived { add => _onShutReceived.Add(value); remove => _onShutReceived.Remove(value); }
+    private readonly AsyncEvent<Func<VREvent_t, CancellationToken, Task>> _onShutReceived = new();
+
     public event Func<CancellationToken, Task> OnSteamVRFound { add => _onSteamVRFound.Add(value); remove => _onSteamVRFound.Remove(value); }
     private readonly AsyncEvent<Func<CancellationToken, Task>> _onSteamVRFound = new();
 
@@ -45,13 +48,8 @@ public class OpenVRWrapper
         _appId = _appManifest.Applications.Count > 0 ? _appManifest.Applications[0].AppKey : throw new Exception("Manifest dos not contain any applications");
     }
 
-    public void Start() {
-        _ = Task.Run(async () => await InternalStart(CancellationToken.None));
-    }
-
-    public async Task StartAndWaitAsync(CancellationToken token = default) {
-        await InternalStart(CancellationToken.None);
-    }
+    public void Start() => _ = Task.Run(async () => await InternalStart(CancellationToken.None));
+    public async Task StartAndWaitAsync(CancellationToken token = default) => await InternalStart(token);
 
     private async Task InternalStart(CancellationToken token) {
         while(!token.IsCancellationRequested) {
@@ -71,8 +69,8 @@ public class OpenVRWrapper
         }
 
         ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
-        _eventReceiverTask = Task.Run(StartReceivingAsync);
-        _dequeueTask = Task.Run(StartDequeueAsync);
+        _eventReceiverTask = Task.Run(StartReceivingAsync, token);
+        _dequeueTask = Task.Run(StartDequeueAsync, token);
 
         await _onSteamVRFound.InvokeAsync(token);
     }
@@ -92,12 +90,16 @@ public class OpenVRWrapper
         }
         
     }
-
     private async Task StartDequeueAsync() {
         try {
             while (!_cancellationTokenSource.IsCancellationRequested) {
                 VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
-                await _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token);
+                Task eventCall = vrevent.eventType switch {
+                    700 => _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token),
+                    _ => _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token)
+                };
+
+                await eventCall;
             }
         }
         catch (Exception e) {
