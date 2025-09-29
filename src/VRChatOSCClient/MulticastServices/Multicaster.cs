@@ -20,7 +20,7 @@ internal class Multicaster
 
     public Multicaster(ILogger<Multicaster> logger) {
         _logger = logger;
-        _multicastService = new MulticastService { UseIpv6 = true, IgnoreDuplicateMessages = true };
+        _multicastService = new MulticastService { UseIpv6 = false, IgnoreDuplicateMessages = true };
         _serviceDiscovery = new ServiceDiscovery(_multicastService);
 
         _multicastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
