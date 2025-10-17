@@ -21,13 +21,12 @@ public interface IVRChatClient {
     void SendParameterChange<T>(string parameter, T value) where T : notnull;
 }
 
-internal class VRChatClient : IVRChatClient
+internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryService, OscCommunicator oscCOmmunicator, VRChatDataFetcher dataFetcher) : IVRChatClient
 {
-    private readonly ILogger<VRChatClient> _logger;
-    private readonly OscQueryService _queryService;
-    private readonly OscCommunicator _oscCommunicator;
-    private readonly TaskCompletionSource _firstClientTcs;
-    private readonly VRChatDataFetcher _dataFetcher;
+    private readonly ILogger<VRChatClient> _logger = logger;
+    private readonly OscQueryService _queryService = queryService;
+    private readonly OscCommunicator _oscCommunicator = oscCOmmunicator;
+    private readonly VRChatDataFetcher _dataFetcher = dataFetcher;
 
     public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _oscCommunicator.OnMessageReceived += value; remove => _oscCommunicator.OnMessageReceived -= value; }
     public event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterReceived { add => _oscCommunicator.OnParameterChanged += value; remove => _oscCommunicator.OnParameterChanged -= value; }
@@ -38,20 +37,13 @@ internal class VRChatClient : IVRChatClient
     public event Func<VRChatConnectionInfo, CancellationToken, Task> OnVRChatClientFound { add => _onVRChatClientFound.Add(value); remove => _onVRChatClientFound.Remove(value); }
     private readonly AsyncEvent<Func<VRChatConnectionInfo, CancellationToken, Task>> _onVRChatClientFound = new();
 
-
+    private TaskCompletionSource _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private MessageFilter _messageFilter = new();
-    private VRChatConnectionInfo _connectionInfo = new() { SendEndpoint = new(System.Net.IPAddress.Loopback, 0), OSCQueryEndpoint = new(System.Net.IPAddress.Loopback, 0), ReceiveEndpoint = new(System.Net.IPAddress.Loopback, 0) };
-
-    public VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryService, OscCommunicator oscCOmmunicator, VRChatDataFetcher dataFetcher) {
-        _logger = logger;
-        _queryService = queryService;
-        _oscCommunicator = oscCOmmunicator;
-        _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _queryService.OnVrchatClientFound += OnVrchatClientFound;
-        _oscCommunicator.OnAvatarChanged += OnAvatarChangedLoad;
-        _dataFetcher = dataFetcher;
-    }
+    private VRChatConnectionInfo _connectionInfo = new() { 
+        SendEndpoint = new(IPAddress.Loopback, 0),
+        OSCQueryEndpoint = new(IPAddress.Loopback, 0),
+        ReceiveEndpoint = new(IPAddress.Loopback, 0) 
+    };
 
     /// <summary>
     /// Starts up the VRChatClient
@@ -60,13 +52,16 @@ internal class VRChatClient : IVRChatClient
     /// <param name="token"></param>
     /// <returns></returns>
     public void Start(MessageFilter? messageFilter = default, CancellationToken token = default) {
+
         _logger.LogInformation("Starting VRChatClient");
         
         if(messageFilter is not null) {
             _messageFilter = messageFilter;
         }
 
-        _queryService.Start(token);
+        _queryService.OnVrchatClientFound += OnVrchatClientFound;
+        _oscCommunicator.OnAvatarChanged += OnAvatarChangedLoad;
+        _queryService.Start();
     }
 
     /// <summary>
@@ -82,6 +77,8 @@ internal class VRChatClient : IVRChatClient
             OSCQueryEndpoint = new(IPAddress.Loopback, 0)
         };
 
+        _queryService.OnVrchatClientFound += OnVrchatClientFound;
+        _oscCommunicator.OnAvatarChanged += OnAvatarChangedLoad;
         await _oscCommunicator.StartAsync(connection, messageFilter ?? new(), token);
         await _onVRChatClientFound.InvokeAsync(connection, token);
     }
@@ -108,11 +105,13 @@ internal class VRChatClient : IVRChatClient
     public async Task StopAsync(CancellationToken token = default) {
         _logger.LogInformation("Stopping VRChatClient");
 
-        await _queryService.StopAsync(token).ConfigureAwait(false);
-        await _oscCommunicator.StopAsync(token).ConfigureAwait(false);
-        
+        await _queryService.StopAsync(token);
+        await _oscCommunicator.StopAsync(token);
+        _queryService.OnVrchatClientFound -= OnVrchatClientFound;
+        _oscCommunicator.OnAvatarChanged -= OnAvatarChangedLoad;
+
         // Reset the first client task source
-        _firstClientTcs.TrySetCanceled(token);
+        _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
@@ -122,7 +121,7 @@ internal class VRChatClient : IVRChatClient
         _logger.LogInformation("Found Vrchat client. Receiving on: {receiveIP}:{receivePort}. Sending on: {sendIP}:{sendPort}. OSCserver: {oscIP}:{oscPort}", connection.ReceiveEndpoint.Address, connection.ReceiveEndpoint.Port, connection.SendEndpoint.Address, connection.SendEndpoint.Port, connection.OSCQueryEndpoint.Address, connection.OSCQueryEndpoint.Port);
         _connectionInfo = connection;
 
-        await _oscCommunicator.StartAsync(connection, _messageFilter, CancellationToken.None);
+        await _oscCommunicator.StartAsync(connection, _messageFilter, token);
         
         _firstClientTcs.TrySetResult();
 

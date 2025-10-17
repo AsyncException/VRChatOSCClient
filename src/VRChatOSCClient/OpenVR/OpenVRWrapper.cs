@@ -5,28 +5,36 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Valve.VR;
 using VRChatOSCClient.TaskExtensions;
+using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.OpenVR;
 
-public class OpenVRWrapper
+public class OpenVRWrapper : IAsyncDisposable
 {
     private readonly string _appId;
     private readonly string _appManifestPath;
     private readonly AppManifest _appManifest;
     private readonly ILogger<OpenVRWrapper> _logger;
     private readonly IOptions<OpenVRWrapperSettings>? _options;
-    private readonly TaskCompletionSource _firstClientTcs;
+    private readonly Channel<VREvent_t> _eventChannel = Channel.CreateUnbounded<VREvent_t>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
+    /// <summary>
+    /// Gets called when an event is received from OpenVR
+    /// </summary>
     public event Func<VREvent_t, CancellationToken, Task> OnEventReceived { add => _onEventReceived.Add(value); remove => _onEventReceived.Remove(value); }
     private readonly AsyncEvent<Func<VREvent_t, CancellationToken, Task>> _onEventReceived = new();
 
+    /// <summary>
+    /// Gets called when OpenVR is shutdown
+    /// </summary>
     public event Func<VREvent_t, CancellationToken, Task> OnShutdownReceived { add => _onShutReceived.Add(value); remove => _onShutReceived.Remove(value); }
     private readonly AsyncEvent<Func<VREvent_t, CancellationToken, Task>> _onShutReceived = new();
 
+    /// <summary>
+    /// Gets called when the SteamVR client is found and events are being received
+    /// </summary>
     public event Func<CancellationToken, Task> OnSteamVRFound { add => _onSteamVRFound.Add(value); remove => _onSteamVRFound.Remove(value); }
     private readonly AsyncEvent<Func<CancellationToken, Task>> _onSteamVRFound = new();
-
-    private readonly Channel<VREvent_t> _eventChannel = Channel.CreateUnbounded<VREvent_t>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
     public CVRApplications Applications => Valve.VR.OpenVR.Applications;
     public CVRSystem System => Valve.VR.OpenVR.System;
@@ -40,71 +48,126 @@ public class OpenVRWrapper
         _logger = logger;
         _options = options;
         _appManifestPath = ValidateManifestPath(options);
-
-        _firstClientTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         _appManifest = GetAppManifest(_appManifestPath);
 
         _appId = _appManifest.Applications.Count > 0 ? _appManifest.Applications[0].AppKey : throw new Exception("Manifest dos not contain any applications");
     }
 
-    public void Start() => _ = Task.Run(async () => await InternalStart(CancellationToken.None));
-    public async Task StartAndWaitAsync(CancellationToken token = default) => await InternalStart(token);
+    /// <summary>
+    /// Starts the OpenVR service and starts listening for OpenVR calls
+    /// </summary>
+    public void Start() => _ = InternalStart(_cancellationTokenSource.Token);
+
+    /// <summary>
+    /// Starts the OpenVR service and starts listening for OpenVR calls, awaiting until SteamVR is found
+    /// </summary>
+    /// <returns></returns>
+    public async Task StartAndWaitAsync() => await InternalStart(_cancellationTokenSource.Token);
 
     private async Task InternalStart(CancellationToken token) {
-        while(!token.IsCancellationRequested) {
-            EVRInitError err = EVRInitError.None;
-            Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
-            
-            if(err == EVRInitError.None) {
-                break; //successful start
+        try {
+            CancellationTokenResetter.Reset(ref _cancellationTokenSource);
+
+            while (!token.IsCancellationRequested) {
+                EVRInitError err = EVRInitError.None;
+                Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
+
+                if (err == EVRInitError.None) {
+                    break; //successful start
+                }
+
+                if (err != EVRInitError.Init_NoServerForBackgroundApp) {
+                    _logger.LogError("Error occured while initializing OpenVR, error: {error}", err);
+                    throw new OpenVRException("Error occured while initializing OpenVR`", err);
+                }
+
+                await Task.Delay(1000, token);
             }
 
-            if(err != EVRInitError.Init_NoServerForBackgroundApp) {
-                _logger.LogError("Error occured while initializing OpenVR, error: {error}", err);
-                throw new OpenVRException("Error occured while initializing OpenVR`", err);
+            if (token.IsCancellationRequested) {
+                return;
             }
 
-            await Task.Delay(1000, token);
+            ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
+
+            _eventReceiverTask = StartReceivingAsync();
+            _dequeueTask = StartDequeueAsync();
+
+            await _onSteamVRFound.InvokeAsync(token);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// Stops the OpenVR service and stops listening for OpenVR calls
+    /// </summary>
+    /// <returns></returns>
+    public async Task StopAsync() {
+        _cancellationTokenSource.Cancel();
+        if (_eventReceiverTask is not null) {
+            await _eventReceiverTask;
+            _eventReceiverTask = null!;
         }
 
-        ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
-        _eventReceiverTask = Task.Run(StartReceivingAsync, token);
-        _dequeueTask = Task.Run(StartDequeueAsync, token);
+        if (_dequeueTask is not null) {
+            await _dequeueTask;
+            _dequeueTask = null!;
+        }
 
-        await _onSteamVRFound.InvokeAsync(token);
+        _cancellationTokenSource.Dispose();
     }
-    
+
     private async Task StartReceivingAsync() {
-        try {
-            while (!_cancellationTokenSource.IsCancellationRequested) {
-                VREvent_t vrevent = new();
-                while (Valve.VR.OpenVR.System.PollNextEvent(ref vrevent, (uint)Marshal.SizeOf(vrevent)) && !_cancellationTokenSource.IsCancellationRequested) {
-                    await _eventChannel.Writer.WriteAsync(vrevent);
+        await Task.Yield();
+
+        VREvent_t vrevent = new();
+        uint eventSize = (uint)Marshal.SizeOf(vrevent);
+
+        while (!_cancellationTokenSource.IsCancellationRequested) {
+            try {
+                bool gotevents = false;
+                while (Valve.VR.OpenVR.System.PollNextEvent(ref vrevent, eventSize) && !_cancellationTokenSource.IsCancellationRequested) {
+                    gotevents = true;
+                    await _eventChannel.Writer.WriteAsync(vrevent, _cancellationTokenSource.Token);
+                }
+
+                if(!gotevents) {
+                    await Task.Delay(10, _cancellationTokenSource.Token);
                 }
             }
+            catch (OperationCanceledException) {
+                break;
+            }
+            catch (Exception e) {
+                _logger.LogError(e, "Error occurred while receiving SteamVR events");
+                throw;
+            }
         }
-        catch(Exception e) {
-            _logger.LogError(e, "Error occurred while receiving SteamVR events");
-            throw;
-        }
-        
     }
     private async Task StartDequeueAsync() {
-        try {
-            while (!_cancellationTokenSource.IsCancellationRequested) {
+        while (!_cancellationTokenSource.IsCancellationRequested) {
+            try {
                 VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
+
+                if(vrevent.eventType == 700) {
+                    // !!! its important not to await this. If this is awaited the StopAsync may be called and it will hang because the StartDequeueAsync will never exit as its busy with awaiting the StopAsync method.
+                    _ = Task.Run(async() => await _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token));
+                    break;
+                }
+
                 Task eventCall = vrevent.eventType switch {
-                    700 => _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token),
                     _ => _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token)
                 };
 
                 await eventCall;
             }
-        }
-        catch (Exception e) {
-            _logger.LogError(e, "Error occurred while dequeueing SteamVR events");
-            throw;
+            catch (OperationCanceledException) {
+                break;
+            }
+            catch (Exception e) {
+                _logger.LogError(e, "Error occurred while dequeueing SteamVR events");
+                throw;
+            }
         }
     }
 
@@ -138,9 +201,15 @@ public class OpenVRWrapper
             }
         }
     }
+
+    public async ValueTask DisposeAsync() {
+        GC.SuppressFinalize(this);
+        await StopAsync();
+    }
 }
 
-public class OpenVRWrapperSettings {
+public class OpenVRWrapperSettings
+{
     public string ManifestPath { get; set; } = string.Empty;
 }
 
