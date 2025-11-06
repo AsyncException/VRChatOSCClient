@@ -54,7 +54,6 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
             _serverTask = Task.CompletedTask;
         }
 
-        _cts.Dispose();
         _listener = null!;
         _responseProvider = null!;
     }
@@ -130,5 +129,6 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     public async ValueTask DisposeAsync() {
         GC.SuppressFinalize(this);
         await StopAsync();
+        _cts.Dispose();
     }
 }

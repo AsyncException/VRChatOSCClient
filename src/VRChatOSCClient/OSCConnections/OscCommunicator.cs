@@ -147,6 +147,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
 
                 await _onMessageReceived.InvokeAsync(message, _cancellationTokenSource.Token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { } // Ignore operation cancellation
             catch (Exception ex) {
                 _logger.LogError(ex, "Exception occured while receiving and parsing message");
             }
@@ -161,6 +162,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 Message message = MessageParser.Parse(buffer);
                 await _messageChannel.Writer.WriteAsync(message).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { } // Ignore operation cancellation
             catch (Exception ex) {
                 _logger.LogError(ex, "Exception occured while receiving and parsing message");
             }
