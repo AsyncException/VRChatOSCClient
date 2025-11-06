@@ -66,7 +66,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     private async Task ListenLoopAsync() {
         try {
             while (!_cts.IsCancellationRequested) {
-                if(_listener is null) {
+                if (_listener is null) {
                     throw new InvalidOperationException("Listener is not initialized");
                 }
 
@@ -75,7 +75,8 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex){
+        catch (HttpListenerException ex) when (ex.Message == "The I/O operation has been aborted because of either a thread exit or an application request.") { } // This gets thrown when the cts is canceled
+        catch (Exception ex) {
             _logger.LogError(ex, "Encountered error while listening for HOST_INFO requests");
         }
     }
