@@ -11,7 +11,6 @@ public class MessageFilter
     /// </summary>
     public bool DisableReceiving { get; set; } = false;
 
-
     public Regex? ParameterPattern { get; private set; } = null;
 
     /// <summary>

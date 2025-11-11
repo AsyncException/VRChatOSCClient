@@ -13,7 +13,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     private Task? _serverTask;
 
     public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
-        _logger.LogInformation("HostInfoHttpServer starting");
+        _logger.LogHostStarting();
         string prefix = $"http://{binding}:{port}/";
 
         _listener = new HttpListener();
@@ -59,7 +59,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) {
-            _logger.LogError(ex, "Encountered error while listening for HOST_INFO requests");
+            _logger.LogListeningRequestError(ex);
         }
     }
 
@@ -85,7 +85,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
             // check if the parameters contain 'HOST_INFO'
             bool hasHostInfo = !string.IsNullOrEmpty(req.Url.Query) && req.Url.Query.Contains("HOST_INFO", StringComparison.OrdinalIgnoreCase);
 
-            _logger.LogInformation("Answering request {rawUrl}", ctx.Request.RawUrl);
+            _logger.LogAnsweringRequest(ctx.Request.RawUrl);
 
             string responseString = _responseProvider(hasHostInfo) ?? string.Empty;
 
@@ -100,7 +100,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
         }
         catch (Exception ex) {
             try {
-                _logger.LogError(ex, "Unable to respond to request");
+                _logger.LogUnableToRespond(ex);
 
                 res.StatusCode = (int)HttpStatusCode.InternalServerError;
                 res.Close();
@@ -113,4 +113,19 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
         GC.SuppressFinalize(this);
         try { _listener?.Close(); } catch { }
     }
+}
+
+static partial class HostInfoHttpServerLogger {
+    [LoggerMessage(Level = LogLevel.Information, Message = "HostInfoHttpServer starting")]
+    public static partial void LogHostStarting(this ILogger<HostInfoHttpServer> logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Answering request {rawUrl}")]
+    public static partial void LogAnsweringRequest(this ILogger<HostInfoHttpServer> logger, string? rawUrl);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unable to respond to request")]
+    public static partial void LogUnableToRespond(this ILogger<HostInfoHttpServer> logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Encountered error while listening for HOST_INFO requests")]
+    public static partial void LogListeningRequestError(this ILogger<HostInfoHttpServer> logger, Exception exception);
+
 }

@@ -29,19 +29,19 @@ internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientF
 
             string? oscIpString = data.GetProperty("OSC_IP").GetString();
             if (string.IsNullOrEmpty(oscIpString) || !IPAddress.TryParse(oscIpString, out IPAddress? oscIP)) {
-                _logger.LogError("Received empty or malformed IPAddress from host");
+                _logger.LogMalformedIP();
                 throw new Exception("Received empty or malformed IPAddress from HOST_INFO");
             }
 
             if(!data.GetProperty("OSC_PORT").TryGetInt32(out int oscPort)) {
-                _logger.LogError("Received empty or malformed port from host");
+                _logger.LogMalformedPort();
                 throw new Exception("Received empty or malformed port from HOST_INFO");
             }
 
             return new IPEndPoint(oscIP, oscPort);
         }
         catch (Exception ex) {
-            _logger.LogError(ex, "Exception occured while fetching connection endpoint");
+            _logger.LogConnectionEndpointError(ex);
             throw;
         }
     }
@@ -78,4 +78,15 @@ internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientF
             }
         }
     }
+}
+
+internal static partial class VRChatDataFetcherLogger {
+    [LoggerMessage(LogLevel.Error, "Received empty or malformed IPAddress from host")]
+    public static partial void LogMalformedIP(this ILogger<VRChatDataFetcher> logger);
+
+    [LoggerMessage(LogLevel.Error, "Received empty or malformed Port from host")]
+    public static partial void LogMalformedPort(this ILogger<VRChatDataFetcher> logger);
+
+    [LoggerMessage(LogLevel.Error, "Exception occured while fetching connection endpoint")]
+    public static partial void LogConnectionEndpointError(this ILogger<VRChatDataFetcher> logger, Exception ex);
 }

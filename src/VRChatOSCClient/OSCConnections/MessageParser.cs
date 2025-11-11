@@ -199,4 +199,21 @@ public struct SpanWriter(Memory<byte> buffer) {
     }
 
     public readonly Memory<byte> GetFinishedMemory() => _memory[.._position];
+
+    
+}
+
+file static class SpanExtensions
+{
+    extension(ReadOnlySpan<byte> span)
+    {
+        public int IndexOf(byte value) {
+            for (int i = 0; i < span.Length; i++) {
+                if (span[i] == value) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+    }
 }

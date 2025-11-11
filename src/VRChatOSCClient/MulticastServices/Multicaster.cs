@@ -29,7 +29,7 @@ internal class Multicaster
 
     public void Start(CancellationToken token, params ServiceProfile[] serviceProfiles) {
         _token = token;
-        _logger.LogInformation("Multicaster starting");
+        _logger.LogMulticasterStarted();
         _profiles = serviceProfiles;
         _multicastService.Start();
 
@@ -39,7 +39,7 @@ internal class Multicaster
     }
 
     public void Stop() {
-        _logger.LogInformation("Multicaster stopping");
+        _logger.LogMulticasterStopped();
         _multicastService.Stop();
 
         foreach (ServiceProfile profile in _profiles) {
@@ -50,8 +50,9 @@ internal class Multicaster
     }
 
     private void InterfaceDiscovered(object? sender, NetworkInterfaceEventArgs args) {
-        _logger.LogDebug("Network interface discovered");
-        foreach(ServiceProfile profiles in _profiles) {
+        _logger.LogInterfaceDiscovered();
+
+        foreach (ServiceProfile profiles in _profiles) {
             _multicastService.SendQuery(profiles.QualifiedServiceName);
         }
     }
@@ -70,14 +71,32 @@ internal class Multicaster
                 Type: domainName[2]
                 );
 
-            _logger.LogDebug("Service located at: {address}:{port} as {serviceId} {instanceName}", string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
+            _logger.LogInterfaceDiscovered(string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
 
             try {
                 await _serviceAnswerdEvent.InvokeAsync(srvs, _token);
             }
-            catch (Exception ex) { _logger.LogError(ex, "Could not handle ServiceAnsweredEvent"); }
+            catch (Exception ex) { _logger.LogServiceAnsweredEventError(ex); }
         }
     }
 }
 
 public record AnnouncedService(string ServiceId, string ServiceName, IPAddress[] Addresses, ushort Port, string Type);
+
+public static partial class MulticasterLogger
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster starting")]
+    public static partial void LogMulticasterStarted(this ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster stopping")]
+    public static partial void LogMulticasterStopped(this ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Network interface discovered")]
+    public static partial void LogInterfaceDiscovered(this ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Service located at: {address}:{port} as {serviceId} {instanceName}")]
+    public static partial void LogInterfaceDiscovered(this ILogger logger, string? address, ushort port, string serviceId, string instanceName);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not handle ServiceAnsweredEvent")]
+    public static partial void LogServiceAnsweredEventError(this ILogger logger, Exception exception);
+}

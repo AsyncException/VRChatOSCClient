@@ -3,12 +3,10 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading.Channels;
 using VRChatOSCClient.HttpServer;
+using VRChatOSCClient.Models;
 using VRChatOSCClient.MulticastServices;
-using VRChatOSCClient.OSCConnections;
 using VRChatOSCClient.TaskExtensions;
-using Message = VRChatOSCClient.OSCConnections.Message;
 
 namespace VRChatOSCClient.OSCQuery;
 
@@ -46,7 +44,7 @@ internal class OscQueryService
     }
 
     public void Start(CancellationToken token) {
-        _logger.LogInformation("Starting OscQueryService");
+        _logger.LogStartingOscQueryService();
 
         _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, hasHostInfo => hasHostInfo ? HostInfo.ToString() : OscInfo.ToJson(), token);
 
@@ -57,7 +55,7 @@ internal class OscQueryService
     }
 
     public async Task StopAsync(CancellationToken token = default) {
-        _logger.LogInformation("Stopping OscQueryService");
+        _logger.LogStoppingOscQueryService();
 
         _multicaster.Stop();
         await _httpServer.StopAsync(token);
@@ -82,15 +80,27 @@ internal class OscQueryService
         LatestClient = service.ServiceId;
     }
 
-    public static int GetAvailablePort(ProtocolType type) {
+    public int GetAvailablePort(ProtocolType type) {
         try {
             using Socket soc = new(AddressFamily.InterNetwork, type == ProtocolType.Udp ? SocketType.Dgram : SocketType.Stream, type);
             soc.Bind(new IPEndPoint(IPAddress.Loopback, 0));
             return ((IPEndPoint)soc.LocalEndPoint!).Port;
         }
-        catch {
-            Debug.WriteLine("Unable to find open Udp port"); // Keep monitoring if this how likely it is that this fails.
+        catch(Exception ex) {
+            _logger.LogAvailablePortError(ex);
             throw;
         }
     }
+}
+
+
+internal static partial class OscQueryInfoLogger {
+    [LoggerMessage(LogLevel.Information, "Starting OscQueryService")]
+    public static partial void LogStartingOscQueryService(this ILogger<OscQueryService> logger);
+
+    [LoggerMessage(LogLevel.Information, "Stopping OscQueryService")]
+    public static partial void LogStoppingOscQueryService(this ILogger<OscQueryService> logger);
+
+    [LoggerMessage(LogLevel.Error, "Unable to find open UDP port")]
+    public static partial void LogAvailablePortError(this ILogger<OscQueryService> logger, Exception ex);
 }

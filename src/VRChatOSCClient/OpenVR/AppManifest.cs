@@ -69,22 +69,19 @@ public class AppManifestBuilder {
     public AppManifest Build() => new(Source, [new(AppKey, LaunchType, BinaryPathWindows, IsDashboardOverlay, new(new(Name, Description)))]);
 }
 
-#if DEBUG
 
-public static class AppManifestExample {
-    public static void Example() {
-        AppManifest manifest = new AppManifestBuilder() {
-            Source = "builtin",
-            AppKey = "application.async",
-            LaunchType = "binary",
-            BinaryPathWindows = "exe file name with extension",
-            IsDashboardOverlay = true,
-            Name = "application name",
-            Description = "A short discription of the app"
-        }.Build();
+//public static class AppManifestExample {
+//    public static void Example() {
+//        AppManifest manifest = new AppManifestBuilder() {
+//            Source = "builtin",
+//            AppKey = "application.async",
+//            LaunchType = "binary",
+//            BinaryPathWindows = "exe file name with extension",
+//            IsDashboardOverlay = true,
+//            Name = "application name",
+//            Description = "A short discription of the app"
+//        }.Build();
 
-        manifest.WriteToFile(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "application name"));
-    }
-}
-
-#endif
+//        manifest.WriteToFile(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "application name"));
+//    }
+//}
