@@ -3,33 +3,46 @@ using Makaretu.Dns.Resolving;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using VRChatOSCClient.TaskExtensions;
+using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.MulticastServices;
 
-internal class Multicaster
+/// <summary>
+/// Service that handles multicast DNS service discovery and advertisement
+/// </summary>
+internal class Multicaster : IDisposable
 {
     private readonly ILogger<Multicaster> _logger;
     private readonly MulticastService _multicastService;
     private readonly ServiceDiscovery _serviceDiscovery;
     private ServiceProfile[] _profiles = [];
 
-    public event Func<AnnouncedService, CancellationToken, Task> ServiceAnswerd { add => _serviceAnswerdEvent.Add(value); remove => _serviceAnswerdEvent.Remove(value); }
-    private readonly AsyncEvent<Func<AnnouncedService, CancellationToken, Task>> _serviceAnswerdEvent = new();
+    /// <summary>
+    /// This event gets called when a new service is discovered on the network
+    /// </summary>
+    public event Func<AnnouncedService, CancellationToken, Task> ServiceAnswered { add => _serviceAnsweredEvent.Add(value); remove => _serviceAnsweredEvent.Remove(value); }
+    private readonly AsyncEvent<Func<AnnouncedService, CancellationToken, Task>> _serviceAnsweredEvent = new();
 
-    private CancellationToken _token = CancellationToken.None;
+    private CancellationTokenSource _cts = new();
 
     public Multicaster(ILogger<Multicaster> logger) {
         _logger = logger;
         _multicastService = new MulticastService { UseIpv6 = false, IgnoreDuplicateMessages = true };
         _serviceDiscovery = new ServiceDiscovery(_multicastService);
-
-        _multicastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
-        _multicastService.AnswerReceived += AnswerReceived;
     }
 
-    public void Start(CancellationToken token, params ServiceProfile[] serviceProfiles) {
-        _token = token;
-        _logger.LogMulticasterStarted();
+    /// <summary>
+    /// Starts the multicaster, advertising the given service profiles and listening for answers
+    /// </summary>
+    /// <param name="serviceProfiles">The profiles to advertise</param>
+    public void Start(params ServiceProfile[] serviceProfiles) {
+        _logger.LogInformation("Multicaster starting");
+
+        CancellationTokenResetter.Reset(ref _cts);
+
+        _multicastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
+        _multicastService.AnswerReceived += AnswerReceivedAsync;
+
         _profiles = serviceProfiles;
         _multicastService.Start();
 
@@ -38,6 +51,9 @@ internal class Multicaster
         }
     }
 
+    /// <summary>
+    /// Stops the multicaster, unadvertising all services and stopping listening
+    /// </summary>
     public void Stop() {
         _logger.LogMulticasterStopped();
         _multicastService.Stop();
@@ -46,7 +62,12 @@ internal class Multicaster
             _serviceDiscovery.Unadvertise(profile);
         }
 
+        _multicastService.Stop();
+
         _profiles = [];
+
+        _multicastService.NetworkInterfaceDiscovered -= InterfaceDiscovered;
+        _multicastService.AnswerReceived -= AnswerReceivedAsync;
     }
 
     private void InterfaceDiscovered(object? sender, NetworkInterfaceEventArgs args) {
@@ -57,7 +78,7 @@ internal class Multicaster
         }
     }
 
-    private async void AnswerReceived(object? sender, MessageEventArgs args) {
+    private async void AnswerReceivedAsync(object? sender, MessageEventArgs args) {
         IEnumerable<SRVRecord> records = args.Message.AdditionalRecords.OfType<SRVRecord>();
         foreach(SRVRecord record in records) {
             IReadOnlyList<string> domainName = record.Name.Labels;
@@ -74,12 +95,14 @@ internal class Multicaster
             _logger.LogInterfaceDiscovered(string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
 
             try {
-                await _serviceAnswerdEvent.InvokeAsync(srvs, _token);
+                await _serviceAnsweredEvent.InvokeAsync(srvs, _cts.Token);
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Could not handle ServiceAnsweredEvent"); 
             }
             catch (Exception ex) { _logger.LogServiceAnsweredEventError(ex); }
         }
     }
-}
 
 public record AnnouncedService(string ServiceId, string ServiceName, IPAddress[] Addresses, ushort Port, string Type);
 

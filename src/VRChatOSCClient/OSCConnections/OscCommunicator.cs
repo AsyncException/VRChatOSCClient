@@ -7,6 +7,7 @@ using System.Threading.Channels;
 using VRChatOSCClient.OpenVR;
 using VRChatOSCClient.OSCQuery;
 using VRChatOSCClient.TaskExtensions;
+using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.OSCConnections;
 
@@ -19,9 +20,9 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     private Socket? _receiverSocket;
 
     private CancellationTokenSource _cancellationTokenSource = new();
-    private Task? _receiverTask;
-    private Task? _dequeueTask;
     private MessageFilter _messageFilter = new();
+    private Task _receiverTask = Task.CompletedTask;
+    private Task _dequeueTask = Task.CompletedTask;
 
     public event Func<ParameterChangedMessage, CancellationToken, Task> OnParameterChanged { add => _onParameterChanged.Add(value); remove => _onParameterChanged.Remove(value); }
     private readonly AsyncEvent<Func<ParameterChangedMessage, CancellationToken, Task>> _onParameterChanged = new();
@@ -29,7 +30,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     public event Func<AvatarChangedMessage, CancellationToken, Task> OnAvatarChanged { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
     private readonly AsyncEvent<Func<AvatarChangedMessage, CancellationToken, Task>> _onAvatarChanged = new();
 
-    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onAvatarChanged.Add(value); remove => _onAvatarChanged.Remove(value); }
+    public event Func<Message, CancellationToken, Task> OnMessageReceived { add => _onMessageReceived.Add(value); remove => _onMessageReceived.Remove(value); }
     private readonly AsyncEvent<Func<Message, CancellationToken, Task>> _onMessageReceived = new();
 
     private readonly Channel<Message> _messageChannel = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
@@ -40,14 +41,23 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             await StopAsync(token);
         }
 
-        await _semaphore.WaitAsync(token);
+        await _semaphore.WaitAsync(token).ConfigureAwait(false);
+        try {
+            _logger.LogInformation("Starting OSCCommunicator");
+            _messageFilter = messageFilter;
 
         _logger.LogStartingOscCommunicator();
         _messageFilter = messageFilter;
 
-        if (!_cancellationTokenSource.TryReset()) {
-            _cancellationTokenSource = new CancellationTokenSource();
-        }
+            try {
+                _senderSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                await _senderSocket.ConnectAsync(connectionInfo.SendEndpoint, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to connect sender socket to {SendEndpoint}", connectionInfo.SendEndpoint);
+                _semaphore.Release();
+                throw;
+            }
 
         try {
             _senderSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp); 
@@ -59,22 +69,15 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             throw;
         }
 
-        try {
-            _receiverSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            _receiverSocket.Bind(connectionInfo.ReceiveEndpoint);
+            if (!_messageFilter.DisableReceiving) {
+                _receiverTask = StartReceivingAsync();
+                _dequeueTask = StartDequeueAsync();
+            }
         }
         catch (Exception ex) {
             _logger.LogFailedReceiverSocketCreate(ex, connectionInfo.ReceiveEndpoint);
             _semaphore.Release();
-            throw;
         }
-
-        if (!_messageFilter.DisableReceiving) {
-            _receiverTask = StartReceivingAsync();
-            _dequeueTask = StartDequeue();
-        }
-
-        _semaphore.Release();
     }
 
     public async Task StopAsync(CancellationToken token = default) {
@@ -83,6 +86,8 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
 
         await _semaphore.WaitAsync(token);
+        try {
+            _logger.LogInformation("Stopping OSCCommunicator");
 
         _logger.LogStoppingOscCommunicator();
 
@@ -92,10 +97,10 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             _receiverTask = Task.CompletedTask;
         }
 
-        if (_dequeueTask is not null) {
-            await _dequeueTask.ConfigureAwait(false);
-            _dequeueTask = Task.CompletedTask;
-        }
+            if (_dequeueTask is not null) {
+                await _dequeueTask.ConfigureAwait(false);
+                _dequeueTask = Task.CompletedTask;
+            }
 
         try {
             _senderSocket?.Close();
@@ -107,16 +112,18 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             _logger.LogFailedSenderSocketDestroy(ex);
         }
 
-        try {
-            _receiverSocket?.Close();
-            _receiverSocket?.Dispose();
-            _receiverSocket = null;
+            try {
+                _receiverSocket?.Close();
+                _receiverSocket?.Dispose();
+                _receiverSocket = null;
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to disconnect receiver socket");
+            }
         }
         catch (Exception ex) {
             _logger.LogFailedReceiverSocketDestroy(ex);
         }
-
-        _semaphore.Release();
     }
 
     public async Task StartReceivingAsync() {
@@ -136,7 +143,6 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     public async Task StartDequeue() {
         while (!_cancellationTokenSource.IsCancellationRequested) {
             try {
-
                 Message message = await _messageChannel.Reader.ReadAsync(_cancellationTokenSource.Token).ConfigureAwait(false);
                 _logger.LogMessageReceived(message.Address, message.Arguments[0]);
 
@@ -161,6 +167,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
 
                 await _onMessageReceived.InvokeAsync(message, _cancellationTokenSource.Token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { } // Ignore operation cancellation
             catch (Exception ex) {
                 _logger.LogDequeueingError(ex);
             }

@@ -1,16 +1,22 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Text;
+using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.HttpServer;
 
-internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposable
+/// <summary>
+/// Provides an HTTP Server that provides host information through a REST api call
+/// </summary>
+/// <param name="logger"></param>
+internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDisposable
 {
     private readonly ILogger<HostInfoHttpServer> _logger = logger;
 
     private HttpListener? _listener = null!;
     private Func<bool, string> _responseProvider = null!;
-    private Task? _serverTask;
+    private Task _serverTask = Task.CompletedTask;
+    private CancellationTokenSource _cts = new();
 
     public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
         _logger.LogHostStarting();
@@ -21,18 +27,25 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
         _responseProvider = responseProvider ?? throw new ArgumentNullException(nameof(responseProvider));
 
         _listener.Start();
-        _serverTask = ListenLoopAsync(token);
+        _serverTask = ListenLoopAsync();
     }
 
+    /// <summary>
+    /// Stops the HTTP server and cleans up resources
+    /// </summary>
+    /// <param name="token"></param>
+    /// <returns></returns>
     public async Task StopAsync(CancellationToken token = default) {
-        _listener?.Stop();
-        if (_serverTask != null) {
-            await _serverTask.WaitAsync(token).ConfigureAwait(false);
+        _listener?.Close();
+        _cts.Cancel();
+
+        if (_serverTask is not null) {
+            await _serverTask.WaitAsync(token);
+            _serverTask = Task.CompletedTask;
         }
 
         _listener = null!;
         _responseProvider = null!;
-        _serverTask = null;
     }
 
     /// <summary>
@@ -40,22 +53,15 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// </summary>
     /// <param name="ct"></param>
     /// <returns></returns>
-    private async Task ListenLoopAsync(CancellationToken ct) {
+    private async Task ListenLoopAsync() {
         try {
-            while (!ct.IsCancellationRequested) {
-                HttpListenerContext? ctx = null;
-                try {
-                    if(_listener is not null) {
-                        ctx = await _listener.GetContextAsync().ConfigureAwait(false);
-                    }
-                }
-                catch(Exception ex) when (ex is HttpListenerException or ObjectDisposedException && ct.IsCancellationRequested) {
-                    break;
+            while (!_cts.IsCancellationRequested) {
+                if (_listener is null) {
+                    throw new InvalidOperationException("Listener is not initialized");
                 }
 
-                if(ctx is not null) {
-                    _ = HandleContextAsync(ctx, ct);
-                }
+                HttpListenerContext? ctx = await _listener.GetContextAsync().WaitAsync(_cts.Token);
+                await HandleContextAsync(ctx);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -68,7 +74,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// </summary>
     /// <param name="ctx"></param>
     /// <returns></returns>
-    private async Task HandleContextAsync(HttpListenerContext ctx, CancellationToken token) {
+    private async Task HandleContextAsync(HttpListenerContext ctx) {
         HttpListenerRequest req = ctx.Request;
         HttpListenerResponse res = ctx.Response;
 
@@ -95,7 +101,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
             res.ContentLength64 = buffer.Length;
 
             // Write body
-            await res.OutputStream.WriteAsync(buffer, token).ConfigureAwait(false);
+            await res.OutputStream.WriteAsync(buffer, _cts.Token);
             res.Close();
         }
         catch (Exception ex) {
@@ -109,9 +115,10 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
         }
     }
 
-    public void Dispose() {
+    public async ValueTask DisposeAsync() {
         GC.SuppressFinalize(this);
-        try { _listener?.Close(); } catch { }
+        await StopAsync();
+        _cts.Dispose();
     }
 }
 
