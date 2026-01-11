@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using VRChatOSCClient.HttpServer;
+using VRChatOSCClient.Models;
 using VRChatOSCClient.MulticastServices;
 using VRChatOSCClient.TaskExtensions;
 
@@ -26,8 +27,23 @@ internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServ
     public event Func<VRChatConnectionInfo, CancellationToken, Task> OnVrchatClientFound { add => _onVrchatClientFoundEvent.Add(value); remove => _onVrchatClientFoundEvent.Remove(value); }
     private readonly AsyncEvent<Func<VRChatConnectionInfo, CancellationToken, Task>> _onVrchatClientFoundEvent = new();
 
-    public void Start() {
-        _logger.LogInformation("Starting OscQueryService");
+    public OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServer httpServer, Multicaster multicaster, Settings settings, VRChatDataFetcher dataFetcher) {
+        _logger = logger;
+        _settings = settings;
+        _httpServer = httpServer;
+        _multicaster = multicaster;
+        _dataFetcher = dataFetcher;
+
+        _multicaster.ServiceAnswerd += ServiceFound;
+        
+        HttpPort = GetAvailablePort(ProtocolType.Tcp);
+        OscReceivePort = GetAvailablePort(ProtocolType.Udp);
+
+        HostInfo = new(_settings.ServiceName, _settings.Address, OscReceivePort);
+    }
+
+    public void Start(CancellationToken token) {
+        _logger.LogStartingOscQueryService();
 
         _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse);
 
@@ -39,7 +55,7 @@ internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServ
     }
 
     public async Task StopAsync(CancellationToken token = default) {
-        _logger.LogInformation("Stopping OscQueryService");
+        _logger.LogStoppingOscQueryService();
 
         _multicaster.Stop();
         _multicaster.ServiceAnswered -= ServiceFound;
@@ -74,15 +90,27 @@ internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServ
         await _onVrchatClientFoundEvent.InvokeAsync(connectionInfo, token);
     }
 
-    public static int GetAvailablePort(ProtocolType type, Settings settings) {
+    public int GetAvailablePort(ProtocolType type) {
         try {
             using Socket soc = new(AddressFamily.InterNetwork, type == ProtocolType.Udp ? SocketType.Dgram : SocketType.Stream, type);
             soc.Bind(new IPEndPoint(settings.Address, 0));
             return ((IPEndPoint)soc.LocalEndPoint!).Port;
         }
-        catch {
-            Debug.WriteLine("Unable to find open Udp port"); // Keep monitoring if this how likely it is that this fails.
+        catch(Exception ex) {
+            _logger.LogAvailablePortError(ex);
             throw;
         }
     }
+}
+
+
+internal static partial class OscQueryInfoLogger {
+    [LoggerMessage(LogLevel.Information, "Starting OscQueryService")]
+    public static partial void LogStartingOscQueryService(this ILogger<OscQueryService> logger);
+
+    [LoggerMessage(LogLevel.Information, "Stopping OscQueryService")]
+    public static partial void LogStoppingOscQueryService(this ILogger<OscQueryService> logger);
+
+    [LoggerMessage(LogLevel.Error, "Unable to find open UDP port")]
+    public static partial void LogAvailablePortError(this ILogger<OscQueryService> logger, Exception ex);
 }

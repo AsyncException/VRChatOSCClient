@@ -11,13 +11,13 @@ public class AsyncEvent<T> where T : class
     public IReadOnlyList<T> Subscriptions => _subscriptions;
 
     public void Add(T subscriber) {
-        using (_lock.EnterScope()) {
+        lock (_lock) {
             _subscriptions = _subscriptions.Add(subscriber);
         }
     }
 
     public void Remove(T subscriber) {
-        using (_lock.EnterScope()) {
+        lock (_lock) {
             _subscriptions = _subscriptions.Remove(subscriber);
         }
     }
@@ -25,35 +25,44 @@ public class AsyncEvent<T> where T : class
 
 internal static class AsyncEventExtensions
 {
-    public static async Task InvokeAsync(this AsyncEvent<Func<Task>> eventHandler) {
-        IReadOnlyList<Func<Task>> subscribers = eventHandler.Subscriptions;
-        Task[] tasks = new Task[subscribers.Count];
+    extension (AsyncEvent<Func<Task>> eventHandler) {
+        public async Task InvokeAsync() {
+            IReadOnlyList<Func<Task>> subscribers = eventHandler.Subscriptions;
+            Task[] tasks = new Task[subscribers.Count];
 
-        for (int i = 0; i < subscribers.Count; i++) {
-            tasks[i] = subscribers[i].Invoke();
+            for (int i = 0; i < subscribers.Count; i++) {
+                tasks[i] = subscribers[i].Invoke();
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
-
-        await Task.WhenAll(tasks).ConfigureAwait(false);
-    }
-    public static async Task InvokeAsync<T>(this AsyncEvent<Func<T, Task>> eventHandler, T arg) {
-        IReadOnlyList<Func<T, Task>> subscribers = eventHandler.Subscriptions;
-        Task[] tasks = new Task[subscribers.Count];
-
-        for (int i = 0; i < subscribers.Count; i++) {
-            tasks[i] = subscribers[i].Invoke(arg);
-        }
-
-        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
-    public static async Task InvokeAsync<T1, T2>(this AsyncEvent<Func<T1, T2, Task>> eventHandler, T1 arg1, T2 arg2) {
-        IReadOnlyList<Func<T1, T2, Task>> subscribers = eventHandler.Subscriptions;
-        Task[] tasks = new Task[subscribers.Count];
+    extension<T>(AsyncEvent<Func<T, Task>> eventHandler)
+    {
+        public async Task InvokeAsync(T arg) {
+            IReadOnlyList<Func<T, Task>> subscribers = eventHandler.Subscriptions;
+            Task[] tasks = new Task[subscribers.Count];
 
-        for (int i = 0; i < subscribers.Count; i++) {
-            tasks[i] = subscribers[i].Invoke(arg1, arg2);
+            for (int i = 0; i < subscribers.Count; i++) {
+                tasks[i] = subscribers[i].Invoke(arg);
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
+    }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+    extension<T1, T2>(AsyncEvent<Func<T1, T2, Task>> eventHandler)
+    {
+        public async Task InvokeAsync(T1 arg1, T2 arg2) {
+            IReadOnlyList<Func<T1, T2, Task>> subscribers = eventHandler.Subscriptions;
+            Task[] tasks = new Task[subscribers.Count];
+
+            for (int i = 0; i < subscribers.Count; i++) {
+                tasks[i] = subscribers[i].Invoke(arg1, arg2);
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
     }
 }

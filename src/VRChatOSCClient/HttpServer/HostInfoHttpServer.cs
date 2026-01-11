@@ -18,18 +18,8 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     private Task _serverTask = Task.CompletedTask;
     private CancellationTokenSource _cts = new();
 
-    /// <summary>
-    /// Starts the HTTP service
-    /// </summary>
-    /// <param name="binding">The ip or dns binding the http server should listen to</param>
-    /// <param name="port">The port the http server should listen to</param>
-    /// <param name="responseProvider">A callback that gets triggered when a call comes in</param>
-    /// <exception cref="ArgumentNullException"></exception>
-    public void Start(string binding, ushort port, Func<bool, string> responseProvider) {
-        _logger.LogInformation("HostInfoHttpServer starting");
-        
-        CancellationTokenResetter.Reset(ref _cts);
-
+    public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
+        _logger.LogHostStarting();
         string prefix = $"http://{binding}:{port}/";
 
         _listener = new HttpListener();
@@ -74,10 +64,8 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
                 await HandleContextAsync(ctx);
             }
         }
-        catch (OperationCanceledException) { }
-        catch (HttpListenerException ex) when (ex.Message == "The I/O operation has been aborted because of either a thread exit or an application request.") { } // This gets thrown when the cts is canceled
-        catch (Exception ex) {
-            _logger.LogError(ex, "Encountered error while listening for HOST_INFO requests");
+        catch (Exception ex) when (ex is not OperationCanceledException) {
+            _logger.LogListeningRequestError(ex);
         }
     }
 
@@ -103,7 +91,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
             // check if the parameters contain 'HOST_INFO'
             bool hasHostInfo = !string.IsNullOrEmpty(req.Url.Query) && req.Url.Query.Contains("HOST_INFO", StringComparison.OrdinalIgnoreCase);
 
-            _logger.LogInformation("Answering request {rawUrl}", ctx.Request.RawUrl);
+            _logger.LogAnsweringRequest(ctx.Request.RawUrl);
 
             string responseString = _responseProvider(hasHostInfo) ?? string.Empty;
 
@@ -118,7 +106,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
         }
         catch (Exception ex) {
             try {
-                _logger.LogError(ex, "Unable to respond to request");
+                _logger.LogUnableToRespond(ex);
 
                 res.StatusCode = (int)HttpStatusCode.InternalServerError;
                 res.Close();
@@ -132,4 +120,19 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
         await StopAsync();
         _cts.Dispose();
     }
+}
+
+static partial class HostInfoHttpServerLogger {
+    [LoggerMessage(Level = LogLevel.Information, Message = "HostInfoHttpServer starting")]
+    public static partial void LogHostStarting(this ILogger<HostInfoHttpServer> logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Answering request {rawUrl}")]
+    public static partial void LogAnsweringRequest(this ILogger<HostInfoHttpServer> logger, string? rawUrl);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unable to respond to request")]
+    public static partial void LogUnableToRespond(this ILogger<HostInfoHttpServer> logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Encountered error while listening for HOST_INFO requests")]
+    public static partial void LogListeningRequestError(this ILogger<HostInfoHttpServer> logger, Exception exception);
+
 }
