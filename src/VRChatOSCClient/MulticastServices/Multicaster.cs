@@ -10,11 +10,12 @@ namespace VRChatOSCClient.MulticastServices;
 /// <summary>
 /// Service that handles multicast DNS service discovery and advertisement
 /// </summary>
-internal class Multicaster : IDisposable
+internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
 {
-    private readonly ILogger<Multicaster> _logger;
-    private readonly MulticastService _multicastService;
-    private readonly ServiceDiscovery _serviceDiscovery;
+    private readonly ILogger<Multicaster> _logger = logger;
+
+    private RunningState? _state;
+
     private ServiceProfile[] _profiles = [];
 
     /// <summary>
@@ -23,61 +24,83 @@ internal class Multicaster : IDisposable
     public event Func<AnnouncedService, CancellationToken, Task> ServiceAnswered { add => _serviceAnsweredEvent.Add(value); remove => _serviceAnsweredEvent.Remove(value); }
     private readonly AsyncEvent<Func<AnnouncedService, CancellationToken, Task>> _serviceAnsweredEvent = new();
 
-    private CancellationTokenSource _cts = new();
-
-    public Multicaster(ILogger<Multicaster> logger) {
-        _logger = logger;
-        _multicastService = new MulticastService { UseIpv6 = false, IgnoreDuplicateMessages = true };
-        _serviceDiscovery = new ServiceDiscovery(_multicastService);
-    }
-
     /// <summary>
     /// Starts the multicaster, advertising the given service profiles and listening for answers
     /// </summary>
     /// <param name="serviceProfiles">The profiles to advertise</param>
     public void Start(params ServiceProfile[] serviceProfiles) {
-        _logger.LogInformation("Multicaster starting");
+        if(_state is null) {
+            _logger.LogMulticasterAlreadyStarted();
+            throw new InvalidOperationException("Multicaster is already started");
+        }
 
-        CancellationTokenResetter.Reset(ref _cts);
+        _logger.LogMulticasterStarted();
 
-        _multicastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
-        _multicastService.AnswerReceived += AnswerReceivedAsync;
+        var state = new RunningState();
+        state.MulticastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
+        state.MulticastService.AnswerReceived += AnswerReceivedAsync;
+
+        state.MulticastService.Start();
 
         _profiles = serviceProfiles;
-        _multicastService.Start();
 
         foreach (ServiceProfile profile in _profiles) {
-            _serviceDiscovery.Advertise(profile);
+            state.ServiceDiscovery.Advertise(profile);
         }
+
+        _state = state;
     }
 
     /// <summary>
     /// Stops the multicaster, unadvertising all services and stopping listening
     /// </summary>
     public void Stop() {
+        var state = _state;
+
+        if(state is null) {
+            return;
+        }
+
         _logger.LogMulticasterStopped();
 
         foreach (ServiceProfile profile in _profiles) {
-            _serviceDiscovery.Unadvertise(profile);
+            state.ServiceDiscovery.Unadvertise(profile);
         }
 
-        _multicastService.Stop();
+        state.MulticastService.NetworkInterfaceDiscovered -= InterfaceDiscovered;
+        state.MulticastService.AnswerReceived -= AnswerReceivedAsync;
+
+        state.MulticastService.Stop();
+        state.CTS.Cancel();
+
+        state.Dispose();
 
         _profiles = [];
 
-        _multicastService.NetworkInterfaceDiscovered -= InterfaceDiscovered;
-        _multicastService.AnswerReceived -= AnswerReceivedAsync;
+        _state = null;
     }
 
     private void InterfaceDiscovered(object? sender, NetworkInterfaceEventArgs args) {
+        var state = _state;
+
+        if(state is null) {
+            return;
+        }
+
         _logger.LogInterfaceDiscovered();
 
         foreach (ServiceProfile profiles in _profiles) {
-            _multicastService.SendQuery(profiles.QualifiedServiceName);
+            state.MulticastService.SendQuery(profiles.QualifiedServiceName);
         }
     }
 
     private async void AnswerReceivedAsync(object? sender, MessageEventArgs args) {
+        var state = _state;
+
+        if (state == null) {
+            return;
+        }
+
         IEnumerable<SRVRecord> records = args.Message.AdditionalRecords.OfType<SRVRecord>();
         foreach (SRVRecord record in records) {
             IReadOnlyList<string> domainName = record.Name.Labels;
@@ -94,7 +117,7 @@ internal class Multicaster : IDisposable
             _logger.LogInterfaceDiscovered(string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
 
             try {
-                await _serviceAnsweredEvent.InvokeAsync(srvs, _cts.Token);
+                await _serviceAnsweredEvent.InvokeAsync(srvs, state.CTS.Token);
             }
             catch (Exception ex) { _logger.LogServiceAnsweredEventError(ex); }
         }
@@ -105,18 +128,10 @@ internal class Multicaster : IDisposable
 
     protected virtual void Dispose(bool disposing) {
         if (!_disposedValue) {
-            if (disposing) {
-                _multicastService.Dispose();
-                _serviceDiscovery.Dispose();
-            }
-
+            if (disposing) {}
+            Stop();
             _disposedValue = true;
         }
-    }
-
-    ~Multicaster() {
-        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-        Dispose(disposing: false);
     }
 
     public void Dispose() {
@@ -125,6 +140,24 @@ internal class Multicaster : IDisposable
         GC.SuppressFinalize(this);
     }
     #endregion
+
+    private sealed class RunningState : IDisposable {
+        public MulticastService MulticastService { get; }
+        public ServiceDiscovery ServiceDiscovery { get; }
+        public CancellationTokenSource CTS { get; }
+
+        public RunningState() {
+            CTS = new CancellationTokenSource();
+            MulticastService = new MulticastService { UseIpv6 = false, IgnoreDuplicateMessages = true };
+            ServiceDiscovery = new ServiceDiscovery(MulticastService);
+        }
+
+        public void Dispose() {
+            CTS.Dispose();
+            ServiceDiscovery.Dispose();
+            MulticastService.Dispose();
+        }
+    }
 }
 
 
@@ -132,6 +165,9 @@ public static partial class MulticasterLogger
 {
     [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster starting")]
     public static partial void LogMulticasterStarted(this ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster already started")]
+    public static partial void LogMulticasterAlreadyStarted(this ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster stopping")]
     public static partial void LogMulticasterStopped(this ILogger logger);

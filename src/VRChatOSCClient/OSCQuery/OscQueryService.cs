@@ -34,14 +34,13 @@ internal class OscQueryService
         _multicaster = multicaster;
         _dataFetcher = dataFetcher;
 
-        _multicaster.ServiceAnswered += ServiceFound;
-        
         HttpPort = GetAvailablePort(ProtocolType.Tcp);
         OscReceivePort = GetAvailablePort(ProtocolType.Udp);
     }
 
     public void Start(CancellationToken token) {
         _logger.LogStartingOscQueryService();
+        _multicaster.ServiceAnswered += ServiceFound;
 
         _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse, token);
 
@@ -57,7 +56,7 @@ internal class OscQueryService
 
         _multicaster.Stop();
         _multicaster.ServiceAnswered -= ServiceFound;
-        await _httpServer.StopAsync(token).ConfigureAwait(false);
+        await _httpServer.StopAsync(token);
 
         // Reset the latest client to avoid stale connections
         LatestClient = string.Empty;

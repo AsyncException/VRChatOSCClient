@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Text;
+using Tmds.Linux;
 using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.HttpServer;
@@ -13,20 +14,24 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
 {
     private readonly ILogger<HostInfoHttpServer> _logger = logger;
 
-    private HttpListener? _listener = null!;
-    private Func<bool, string> _responseProvider = null!;
-    private Task _serverTask = Task.CompletedTask;
-    private CancellationTokenSource _cts = new();
+    private RunningState? _state;
 
+    private Task _serverTask = Task.CompletedTask;
+
+    /// <summary>
+    /// Start a HttpListener on the specified binding and port, and use the provided response provider to generate responses for incoming requests.
+    /// </summary>
+    /// <param name="binding"></param>
+    /// <param name="port"></param>
+    /// <param name="responseProvider"></param>
+    /// <param name="token"></param>
     public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
         _logger.LogHostStarting();
-        string prefix = $"http://{binding}:{port}/";
+        
+        var state = new RunningState(binding, port, responseProvider);
+        state.HttpListener.Start();
+        _state = state;
 
-        _listener = new HttpListener();
-        _listener.Prefixes.Add(prefix);
-        _responseProvider = responseProvider ?? throw new ArgumentNullException(nameof(responseProvider));
-
-        _listener.Start();
         _serverTask = ListenLoopAsync();
     }
 
@@ -36,16 +41,21 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     /// <param name="token"></param>
     /// <returns></returns>
     public async Task StopAsync(CancellationToken token = default) {
-        _listener?.Close();
-        _cts.Cancel();
+        var state = _state;
+        if(state is null) {
+            return;
+        }
+
+        state.HttpListener.Close();
+        state.CTS.Cancel();
 
         if (_serverTask is not null) {
             await _serverTask.WaitAsync(token);
             _serverTask = Task.CompletedTask;
         }
 
-        _listener = null!;
-        _responseProvider = null!;
+        state.Dispose();
+        _state = null;
     }
 
     /// <summary>
@@ -55,12 +65,17 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     /// <returns></returns>
     private async Task ListenLoopAsync() {
         try {
-            while (!_cts.IsCancellationRequested) {
-                if (_listener is null) {
+            var state = _state;
+            if(state is null) {
+                return;
+            }
+
+            while (!state.CTS.IsCancellationRequested) {
+                if (state.HttpListener is null) {
                     throw new InvalidOperationException("Listener is not initialized");
                 }
 
-                HttpListenerContext? ctx = await _listener.GetContextAsync().WaitAsync(_cts.Token);
+                HttpListenerContext? ctx = await state.HttpListener.GetContextAsync().WaitAsync(state.CTS.Token);
                 await HandleContextAsync(ctx);
             }
         }
@@ -78,6 +93,13 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
         HttpListenerRequest req = ctx.Request;
         HttpListenerResponse res = ctx.Response;
 
+        var state = _state;
+        if(state is null) {
+            res.StatusCode = (int)HttpStatusCode.InternalServerError;
+            res.Close();
+            return;
+        }
+
         try {
             // Check if the request is valid.
             if (!string.Equals(req.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase) || req.Url == null || !string.Equals(req.Url.AbsolutePath, "/", StringComparison.Ordinal)) {
@@ -93,7 +115,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
 
             _logger.LogAnsweringRequest(ctx.Request.RawUrl);
 
-            string responseString = _responseProvider(hasHostInfo) ?? string.Empty;
+            string responseString = state.ResponseProvider(hasHostInfo) ?? string.Empty;
 
             byte[] buffer = Encoding.UTF8.GetBytes(responseString);
             res.StatusCode = (int)HttpStatusCode.OK;
@@ -101,7 +123,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
             res.ContentLength64 = buffer.Length;
 
             // Write body
-            await res.OutputStream.WriteAsync(buffer, _cts.Token);
+            await res.OutputStream.WriteAsync(buffer, state.CTS.Token);
             res.Close();
         }
         catch (Exception ex) {
@@ -120,21 +142,35 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
 
     protected async virtual ValueTask DisposeAsync(bool disposing) {
         if(!_disposedValue) {
-            if (disposing) {
-                await StopAsync();
-            }
+            if (disposing) { }
+            await StopAsync();
 
             _disposedValue = true;
         }
     }
 
-    ~HostInfoHttpServer() {
-        DisposeAsync(disposing: false).AsTask().GetAwaiter().GetResult();
-    }
-
     public async ValueTask DisposeAsync() {
         await DisposeAsync(disposing: true);
         GC.SuppressFinalize(this);
+    }
+    #endregion
+
+    private class RunningState : IDisposable
+    {
+        public HttpListener HttpListener { get; }
+        public Func<bool, string> ResponseProvider { get; }
+        public CancellationTokenSource CTS { get; }
+
+        public RunningState(string binding, ushort port, Func<bool, string> responseProvider) {
+            HttpListener = new HttpListener();
+            HttpListener.Prefixes.Add($"http://{binding}:{port}/");
+            ResponseProvider = responseProvider;
+            CTS = new();
+        }
+
+        public void Dispose() {
+            CTS.Dispose();
+        }
     }
 }
 
