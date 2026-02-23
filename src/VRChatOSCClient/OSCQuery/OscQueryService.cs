@@ -11,16 +11,16 @@ using VRChatOSCClient.TaskExtensions;
 namespace VRChatOSCClient.OSCQuery;
 
 
-internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServer httpServer, Multicaster multicaster, Settings settings, VRChatDataFetcher dataFetcher)
+internal class OscQueryService
 {
-    private readonly ILogger<OscQueryService> _logger = logger;
-    private readonly HostInfoHttpServer _httpServer = httpServer;
-    private readonly Multicaster _multicaster = multicaster;
-    private readonly Settings _settings = settings;
-    private readonly VRChatDataFetcher _dataFetcher = dataFetcher;
+    private readonly Settings _settings;
+    private readonly Multicaster _multicaster;
+    private readonly HostInfoHttpServer _httpServer;
+    private readonly VRChatDataFetcher _dataFetcher;
+    private readonly ILogger<OscQueryService> _logger;
 
-    public int HttpPort { get; init; } = GetAvailablePort(ProtocolType.Tcp, settings);
-    public int OscReceivePort { get; init; } = GetAvailablePort(ProtocolType.Udp, settings);
+    public int HttpPort { get; init; }
+    public int OscReceivePort { get; init; }
     private string LatestClient { get; set; } = string.Empty;
 
 
@@ -34,18 +34,16 @@ internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServ
         _multicaster = multicaster;
         _dataFetcher = dataFetcher;
 
-        _multicaster.ServiceAnswerd += ServiceFound;
+        _multicaster.ServiceAnswered += ServiceFound;
         
         HttpPort = GetAvailablePort(ProtocolType.Tcp);
         OscReceivePort = GetAvailablePort(ProtocolType.Udp);
-
-        HostInfo = new(_settings.ServiceName, _settings.Address, OscReceivePort);
     }
 
     public void Start(CancellationToken token) {
         _logger.LogStartingOscQueryService();
 
-        _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse);
+        _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse, token);
 
         ServiceProfile httpProfile = new(_settings.ServiceName, "_oscjson._tcp", (ushort)HttpPort, [_settings.Address]);
         ServiceProfile oscProfile = new(_settings.ServiceName, "_osc._udp", (ushort)OscReceivePort, [_settings.Address]);
@@ -93,7 +91,7 @@ internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServ
     public int GetAvailablePort(ProtocolType type) {
         try {
             using Socket soc = new(AddressFamily.InterNetwork, type == ProtocolType.Udp ? SocketType.Dgram : SocketType.Stream, type);
-            soc.Bind(new IPEndPoint(settings.Address, 0));
+            soc.Bind(new IPEndPoint(_settings.Address, 0));
             return ((IPEndPoint)soc.LocalEndPoint!).Port;
         }
         catch(Exception ex) {

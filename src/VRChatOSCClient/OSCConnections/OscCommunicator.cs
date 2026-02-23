@@ -2,12 +2,9 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
 using System.Threading.Channels;
-using VRChatOSCClient.OpenVR;
 using VRChatOSCClient.OSCQuery;
 using VRChatOSCClient.TaskExtensions;
-using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.OSCConnections;
 
@@ -46,8 +43,8 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             _logger.LogInformation("Starting OSCCommunicator");
             _messageFilter = messageFilter;
 
-        _logger.LogStartingOscCommunicator();
-        _messageFilter = messageFilter;
+            _logger.LogStartingOscCommunicator();
+            _messageFilter = messageFilter;
 
             try {
                 _senderSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -59,15 +56,15 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 throw;
             }
 
-        try {
-            _senderSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp); 
-            await _senderSocket.ConnectAsync(connectionInfo.SendEndpoint, token).ConfigureAwait(false);
-        }
-        catch (Exception ex) {
-            _logger.LogFailedSenderSocketCreate(ex, connectionInfo.SendEndpoint);
-            _semaphore.Release();
-            throw;
-        }
+            try {
+                _receiverSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                _receiverSocket.Bind(connectionInfo.ReceiveEndpoint);
+            }
+            catch (Exception ex) {
+                _logger.LogFailedReceiverSocketCreate(ex, connectionInfo.ReceiveEndpoint);
+                _semaphore.Release();
+                throw;
+            }
 
             if (!_messageFilter.DisableReceiving) {
                 _receiverTask = StartReceivingAsync();
@@ -140,7 +137,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
     }
 
-    public async Task StartDequeue() {
+    public async Task StartDequeueAsync() {
         while (!_cancellationTokenSource.IsCancellationRequested) {
             try {
                 Message message = await _messageChannel.Reader.ReadAsync(_cancellationTokenSource.Token).ConfigureAwait(false);

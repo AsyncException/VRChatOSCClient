@@ -1,4 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using VRChatOSCClient.OSCConnections;
 using VRChatOSCClient.OSCQuery;
@@ -61,7 +64,7 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
 
         _queryService.OnVrchatClientFound += OnVrchatClientFound;
         _oscCommunicator.OnAvatarChanged += OnAvatarChangedLoad;
-        _queryService.Start();
+        _queryService.Start(token);
     }
 
     /// <summary>
@@ -145,9 +148,13 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
     /// <param name="token"></param>
     /// <returns></returns>
     public async Task<Dictionary<string, object?>> GetAvatarParametersAsync(CancellationToken token) {
-        return _connectionInfo.OSCQueryEndpoint.Port == 0
-            ? []
-            : await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
+        if(_connectionInfo.OSCQueryEndpoint.Port == 0) {
+            _logger.LogWarning("OSCQuery endpoint is not set. Cannot fetch avatar parameters.");
+            return [];
+        }
+
+        Dictionary<string, object?> parameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
+        return parameters;
     }
 
     /// <summary>
@@ -172,3 +179,26 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
     /// <param name="enableNotification"></param>
     public void SendChatMessage(string message, bool bypassKeyboard = true, bool enableNotification = false) => Send(new ChatMessage(message, bypassKeyboard, enableNotification));
 }
+
+public class AvatarParameterStore : IReadOnlyDictionary<string, IAvatarParameter>
+{
+    private readonly ConcurrentDictionary<string, IAvatarParameter> _parameters = [];
+
+    public int Count => _parameters.Count;
+    public IEnumerable<string> Keys => _parameters.Keys;
+    public IAvatarParameter this[string key] => _parameters[key];
+    public IEnumerable<IAvatarParameter> Values => _parameters.Values;
+
+    internal ConcurrentDictionary<string, IAvatarParameter> GetDictionary() => _parameters;
+    internal void AddOrUpdate(string key, IAvatarParameter parameter) => _parameters.AddOrUpdate(key, parameter, (k, v) => parameter);
+    public bool ContainsKey(string key) => _parameters.ContainsKey(key);
+    public IEnumerator<KeyValuePair<string, IAvatarParameter>> GetEnumerator() => _parameters.GetEnumerator();
+    public bool TryGetValue(string key, [MaybeNullWhen(false)] out IAvatarParameter value) => _parameters.TryGetValue(key, out value);
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+public interface IAvatarParameter { public string Type { get; } }
+public readonly record struct BooleanParameter(bool Value) : IAvatarParameter { public string Type { get; } = "bool"; }
+public readonly record struct SingleParameter(float Value) : IAvatarParameter { public string Type { get; } = "float"; }
+public readonly record struct IntegerParameter(int Value) : IAvatarParameter { public string Type { get; } = "int"; }
+public readonly record struct StringParameter(string Value) : IAvatarParameter { public string Type { get; } = "string"; }

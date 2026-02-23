@@ -76,46 +76,29 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <exception cref="OpenVRException">Thrown when an error occures while connecting</exception>
     private async Task InternalStart(CancellationToken token) {
         _logger.LogStartingOpenVRService();
-        while(!token.IsCancellationRequested) {
-            EVRInitError err = EVRInitError.None;
-            Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
-            
-            if(err == EVRInitError.None) {
-                break; //successful start
+        try {
+            while (!token.IsCancellationRequested) {
+                EVRInitError err = EVRInitError.None;
+                Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
+
+                if (err == EVRInitError.None) {
+                    break; //successful start
+                }
+
+                if (err != EVRInitError.Init_NoServerForBackgroundApp) {
+                    _logger.LogIntializationError(err);
+                    throw new OpenVRException("Error occured while initializing OpenVR`", err);
+                }
+
+                ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
+
+                _eventReceiverTask = StartReceivingAsync();
+                _dequeueTask = StartDequeueAsync();
+
+                await _onSteamVRFound.InvokeAsync(token);
             }
-
-            if(err != EVRInitError.Init_NoServerForBackgroundApp) {
-                _logger.LogIntializationError(err);
-                throw new OpenVRException("Error occured while initializing OpenVR`", err);
-            }
-
-            ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
-
-            _eventReceiverTask = StartReceivingAsync();
-            _dequeueTask = StartDequeueAsync();
-
-            await _onSteamVRFound.InvokeAsync(token);
         }
         catch (OperationCanceledException) { }
-    }
-
-    /// <summary>
-    /// Stops the OpenVR service and stops listening for OpenVR calls
-    /// </summary>
-    /// <returns></returns>
-    public async Task StopAsync() {
-        _cancellationTokenSource.Cancel();
-        if (_eventReceiverTask is not null) {
-            await _eventReceiverTask;
-            _eventReceiverTask = null!;
-        }
-
-        if (_dequeueTask is not null) {
-            await _dequeueTask;
-            _dequeueTask = null!;
-        }
-
-        _cancellationTokenSource.Dispose();
     }
 
     /// <summary>
@@ -125,10 +108,11 @@ public class OpenVRWrapper : IAsyncDisposable
     public async Task StopAsync() {
         _logger.LogStoppingOpenVRService();
         _cancellationTokenSource.Cancel();
+
         try {
             await Task.WhenAll(_eventReceiverTask, _dequeueTask);
         }
-        catch (OperationCanceledException) {}
+        catch (OperationCanceledException) { }
         catch (Exception e) {
             _logger.LogStoppingError(e);
         }
@@ -144,20 +128,14 @@ public class OpenVRWrapper : IAsyncDisposable
             while (Valve.VR.OpenVR.System.PollNextEvent(ref vrevent, (uint)Marshal.SizeOf(vrevent)) && !_cancellationTokenSource.IsCancellationRequested) {
                 await _eventChannel.Writer.WriteAsync(vrevent, _cancellationTokenSource.Token);
             }
-            catch (OperationCanceledException) {
-                break;
-            }
-            catch (Exception e) {
-                _logger.LogError(e, "Error occurred while receiving SteamVR events");
-                throw;
-            }
+
         }
         catch (OperationCanceledException) { }
         catch (Exception e) {
             _logger.LogReceivingError(e);
             throw;
         }
-        
+
     }
 
     /// <summary>
@@ -169,9 +147,9 @@ public class OpenVRWrapper : IAsyncDisposable
             try {
                 VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
 
-                if(vrevent.eventType == 700) {
+                if (vrevent.eventType == 700) {
                     // !!! its important not to await this. If this is awaited the StopAsync may be called and it will hang because the StartDequeueAsync will never exit as its busy with awaiting the StopAsync method.
-                    _ = Task.Run(async() => await _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token));
+                    _ = Task.Run(async () => await _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token));
                     break;
                 }
 
@@ -181,10 +159,10 @@ public class OpenVRWrapper : IAsyncDisposable
 
                 await eventCall;
             }
-        }
-        catch (Exception e) {
-            _logger.LogDequeueError(e);
-            throw;
+            catch (Exception e) {
+                _logger.LogDequeueError(e);
+                throw;
+            }
         }
     }
 
@@ -279,7 +257,7 @@ public static partial class OpenVRWrapperLogger
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Installing app.vrmanifest")]
     public static partial void LogInstallingManifest(this ILogger logger);
-    
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Unable to install app.vrmanifest, error: {err}")]
     public static partial void LogInstallingManifestError(this ILogger logger, EVRApplicationError err);
 }

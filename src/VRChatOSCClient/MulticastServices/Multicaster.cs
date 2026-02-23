@@ -56,7 +56,6 @@ internal class Multicaster : IDisposable
     /// </summary>
     public void Stop() {
         _logger.LogMulticasterStopped();
-        _multicastService.Stop();
 
         foreach (ServiceProfile profile in _profiles) {
             _serviceDiscovery.Unadvertise(profile);
@@ -80,7 +79,7 @@ internal class Multicaster : IDisposable
 
     private async void AnswerReceivedAsync(object? sender, MessageEventArgs args) {
         IEnumerable<SRVRecord> records = args.Message.AdditionalRecords.OfType<SRVRecord>();
-        foreach(SRVRecord record in records) {
+        foreach (SRVRecord record in records) {
             IReadOnlyList<string> domainName = record.Name.Labels;
             IPAddress[] addresses = [.. args.Message.AdditionalRecords.OfType<ARecord>().Select(record => record.Address)];
 
@@ -97,14 +96,37 @@ internal class Multicaster : IDisposable
             try {
                 await _serviceAnsweredEvent.InvokeAsync(srvs, _cts.Token);
             }
-            catch (Exception ex) {
-                _logger.LogError(ex, "Could not handle ServiceAnsweredEvent"); 
-            }
             catch (Exception ex) { _logger.LogServiceAnsweredEventError(ex); }
         }
     }
 
-public record AnnouncedService(string ServiceId, string ServiceName, IPAddress[] Addresses, ushort Port, string Type);
+    #region IDisposable Support
+    private bool _disposedValue;
+
+    protected virtual void Dispose(bool disposing) {
+        if (!_disposedValue) {
+            if (disposing) {
+                _multicastService.Dispose();
+                _serviceDiscovery.Dispose();
+            }
+
+            _disposedValue = true;
+        }
+    }
+
+    ~Multicaster() {
+        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        Dispose(disposing: false);
+    }
+
+    public void Dispose() {
+        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+    #endregion
+}
+
 
 public static partial class MulticasterLogger
 {

@@ -115,10 +115,26 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
         }
     }
 
+    #region IDisposable Support
+    private bool _disposedValue;
+
+    protected async virtual ValueTask DisposeAsync(bool disposing) {
+        if(!_disposedValue) {
+            if (disposing) {
+                await StopAsync();
+            }
+
+            _disposedValue = true;
+        }
+    }
+
+    ~HostInfoHttpServer() {
+        DisposeAsync(disposing: false).AsTask().GetAwaiter().GetResult();
+    }
+
     public async ValueTask DisposeAsync() {
+        await DisposeAsync(disposing: true);
         GC.SuppressFinalize(this);
-        await StopAsync();
-        _cts.Dispose();
     }
 }
 
