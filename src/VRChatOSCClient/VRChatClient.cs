@@ -109,7 +109,7 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
         _logger.LogInformation("Stopping VRChatClient");
 
         _queryService.Stop();
-        _oscCommunicator.Stop();
+        await _oscCommunicator.Stop();
         _queryService.OnVrchatClientFound -= OnVrchatClientFound;
         _oscCommunicator.OnAvatarChanged -= OnAvatarChangedLoad;
 
@@ -138,7 +138,15 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
     /// <param name="token"></param>
     /// <returns></returns>
     private async Task OnAvatarChangedLoad(AvatarChangedMessage message, CancellationToken token) {
-        Dictionary<string, object?> avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
+        Dictionary<string, object?> avatarParameters = [];
+
+        try {
+            avatarParameters = await _dataFetcher.GetAvatarParameters(_connectionInfo.OSCQueryEndpoint.Address, (ushort)_connectionInfo.OSCQueryEndpoint.Port, token);
+        }
+        catch(Exception ex) {
+            _logger.LogError(ex, "Failed to fetch parameters of the current avatar");
+        }
+
         await _onAvatarChanged.InvokeAsync(avatarParameters, token);
     }
 

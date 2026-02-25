@@ -75,10 +75,12 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
                     await HandleContextAsync(ctx);
                 }
                 catch (TaskCanceledException) { }
+                catch (OperationCanceledException) { }
+                catch (HttpListenerException ex) when (ex.ErrorCode == 995) { } // Ignore abort because of thread exit. This is basically the same as OperationCancelledException
                 
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) {
+        catch (Exception ex) {
             _logger.LogListeningRequestError(ex);
         }
     }
