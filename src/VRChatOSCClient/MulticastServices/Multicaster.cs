@@ -29,7 +29,7 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
     /// </summary>
     /// <param name="serviceProfiles">The profiles to advertise</param>
     public void Start(params ServiceProfile[] serviceProfiles) {
-        if(_state is null) {
+        if(_state is not null) {
             _logger.LogMulticasterAlreadyStarted();
             throw new InvalidOperationException("Multicaster is already started");
         }

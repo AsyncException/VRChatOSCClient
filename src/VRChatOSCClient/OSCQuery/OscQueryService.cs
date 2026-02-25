@@ -51,12 +51,12 @@ internal class OscQueryService
         _multicaster.Start(httpProfile, oscProfile);
     }
 
-    public async Task StopAsync(CancellationToken token = default) {
+    public void Stop() {
         _logger.LogStoppingOscQueryService();
 
         _multicaster.Stop();
         _multicaster.ServiceAnswered -= ServiceFound;
-        await _httpServer.StopAsync(token);
+        _httpServer.Stop();
 
         // Reset the latest client to avoid stale connections
         LatestClient = string.Empty;

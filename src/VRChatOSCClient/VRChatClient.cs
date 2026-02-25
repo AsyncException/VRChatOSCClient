@@ -18,7 +18,7 @@ public interface IVRChatClient {
     public void Start(MessageFilter? messageFilter = default, CancellationToken token = default);
     Task Start(IPEndPoint sendEndpoint, IPEndPoint receiveEndpoint, MessageFilter? messageFilter, CancellationToken token);
     Task StartAndWaitAsync(MessageFilter? messageFilter = null, CancellationToken token = default);
-    public Task StopAsync(CancellationToken token = default);
+    public Task StopAsync();
     void Send(Message message);
     void SendChatMessage(string message, bool bypassKeyboard = true, bool enableNotification = false);
     void SendParameterChange<T>(string parameter, T value) where T : notnull;
@@ -105,11 +105,11 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
     /// </summary>
     /// <param name="token"></param>
     /// <returns></returns>
-    public async Task StopAsync(CancellationToken token = default) {
+    public async Task StopAsync() {
         _logger.LogInformation("Stopping VRChatClient");
 
-        await _queryService.StopAsync(token);
-        await _oscCommunicator.StopAsync(token);
+        _queryService.Stop();
+        _oscCommunicator.Stop();
         _queryService.OnVrchatClientFound -= OnVrchatClientFound;
         _oscCommunicator.OnAvatarChanged -= OnAvatarChangedLoad;
 

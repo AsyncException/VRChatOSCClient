@@ -89,14 +89,14 @@ public class OpenVRWrapper : IAsyncDisposable
                     _logger.LogIntializationError(err);
                     throw new OpenVRException("Error occured while initializing OpenVR`", err);
                 }
-
-                ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
-
-                _eventReceiverTask = StartReceivingAsync();
-                _dequeueTask = StartDequeueAsync();
-
-                await _onSteamVRFound.InvokeAsync(token);
             }
+
+            ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
+
+            _eventReceiverTask = StartReceivingAsync();
+            _dequeueTask = StartDequeueAsync();
+
+            await _onSteamVRFound.InvokeAsync(token);
         }
         catch (OperationCanceledException) { }
     }

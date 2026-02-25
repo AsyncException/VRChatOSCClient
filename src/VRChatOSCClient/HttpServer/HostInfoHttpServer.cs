@@ -10,7 +10,7 @@ namespace VRChatOSCClient.HttpServer;
 /// Provides an HTTP Server that provides host information through a REST api call
 /// </summary>
 /// <param name="logger"></param>
-internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDisposable
+internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposable
 {
     private readonly ILogger<HostInfoHttpServer> _logger = logger;
 
@@ -40,7 +40,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     /// </summary>
     /// <param name="token"></param>
     /// <returns></returns>
-    public async Task StopAsync(CancellationToken token = default) {
+    public void Stop() {
         var state = _state;
         if(state is null) {
             return;
@@ -48,11 +48,6 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
 
         state.HttpListener.Close();
         state.CTS.Cancel();
-
-        if (_serverTask is not null) {
-            await _serverTask.WaitAsync(token);
-            _serverTask = Task.CompletedTask;
-        }
 
         state.Dispose();
         _state = null;
@@ -71,12 +66,16 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
             }
 
             while (!state.CTS.IsCancellationRequested) {
-                if (state.HttpListener is null) {
-                    throw new InvalidOperationException("Listener is not initialized");
-                }
+                try {
+                    if (state.HttpListener is null) {
+                        throw new InvalidOperationException("Listener is not initialized");
+                    }
 
-                HttpListenerContext? ctx = await state.HttpListener.GetContextAsync().WaitAsync(state.CTS.Token);
-                await HandleContextAsync(ctx);
+                    HttpListenerContext? ctx = await state.HttpListener.GetContextAsync().WaitAsync(state.CTS.Token);
+                    await HandleContextAsync(ctx);
+                }
+                catch (TaskCanceledException) { }
+                
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -140,17 +139,17 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDi
     #region IDisposable Support
     private bool _disposedValue;
 
-    protected async virtual ValueTask DisposeAsync(bool disposing) {
+    protected virtual void Dispose(bool disposing) {
         if(!_disposedValue) {
             if (disposing) { }
-            await StopAsync();
+            Stop();
 
             _disposedValue = true;
         }
     }
 
-    public async ValueTask DisposeAsync() {
-        await DisposeAsync(disposing: true);
+    public void Dispose() {
+        Dispose(disposing: true);
         GC.SuppressFinalize(this);
     }
     #endregion

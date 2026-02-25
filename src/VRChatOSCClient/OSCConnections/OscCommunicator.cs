@@ -75,29 +75,21 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
     }
 
-    public async Task StopAsync(CancellationToken token = default) {
+    public async Task Stop(CancellationToken token = default) {
         var state = _state;
         if(state is null) {
             return;
         }
 
-        await _semaphore.WaitAsync(token);
         try {
             _logger.LogStoppingOscCommunicator();
 
             state.SenderSocket.Close();
             state.ReceiverSocket.Close();
             state.CTS.Cancel();
-            
-            if (!_receiverTask.IsCompleted) {
-                await _receiverTask;
-                _receiverTask = Task.CompletedTask;
-            }
 
-            if(!_dequeueTask.IsCompleted) {
-                await _dequeueTask;
-                _dequeueTask = Task.CompletedTask;
-            }
+            await _receiverTask;
+            await _dequeueTask;
 
             state.Dispose();
         }
@@ -119,10 +111,13 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 Message message = MessageParser.Parse(buffer);
                 await _messageChannel.Writer.WriteAsync(message);
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex) {
                 _logger.LogReceivingError(ex);
             }
         }
+
+        _logger.LogDebug("[OscCommunicator]::StartReceiving exited successfully");
     }
 
     private async Task StartDequeueAsync() {
@@ -162,6 +157,8 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 _logger.LogDequeueingError(ex);
             }
         }
+
+        _logger.LogDebug("[OscCommunicator]::StartDequeueAsync exited successfully");
     }
 
     /// <summary>
