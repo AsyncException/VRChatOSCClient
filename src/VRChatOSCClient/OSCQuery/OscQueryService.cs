@@ -51,24 +51,24 @@ internal class OscQueryService
         _multicaster.Start(httpProfile, oscProfile);
     }
 
-    public void Stop() {
+    public async Task StopAsync() {
         _logger.LogStoppingOscQueryService();
 
         _multicaster.Stop();
         _multicaster.ServiceAnswered -= ServiceFound;
-        _httpServer.Stop();
+        await _httpServer.StopAsync();
 
         // Reset the latest client to avoid stale connections
         LatestClient = string.Empty;
     }
 
     private string HttpServerResponse(bool hasHostInfo) {
-        if (hasHostInfo) {
-            HostInfo info = new(_settings.ServiceName, _settings.Address, OscReceivePort);
-            return info.ToString();
-        }
+        if (!hasHostInfo)
+            return OscInfo.ToJson();
+        
+        HostInfo info = new(_settings.ServiceName, _settings.Address, OscReceivePort);
+        return info.ToString();
 
-        return OscInfo.ToJson();
     }
 
     private async Task ServiceFound(AnnouncedService service, CancellationToken token) {

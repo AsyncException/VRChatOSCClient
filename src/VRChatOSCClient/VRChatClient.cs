@@ -108,7 +108,7 @@ internal class VRChatClient(ILogger<VRChatClient> logger, OscQueryService queryS
     public async Task StopAsync() {
         _logger.LogInformation("Stopping VRChatClient");
 
-        _queryService.Stop();
+        await _queryService.StopAsync();
         await _oscCommunicator.Stop();
         _queryService.OnVrchatClientFound -= OnVrchatClientFound;
         _oscCommunicator.OnAvatarChanged -= OnAvatarChangedLoad;
