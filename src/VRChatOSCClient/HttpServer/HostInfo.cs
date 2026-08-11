@@ -2,12 +2,12 @@
 
 namespace VRChatOSCClient.HttpServer;
 
-internal record HostInfo(string ServiceName, IPAddress IPAddress, int Port) {
+internal record HostInfo(string ServiceName, IPAddress IpAddress, int Port) {
     public override string ToString() {
         return $$"""
         {
           "NAME": "{{ServiceName}}",
-          "OSC_IP": "{{IPAddress}}",
+          "OSC_IP": "{{IpAddress}}",
           "OSC_PORT": {{Port}},
           "OSC_TRANSPORT": "UDP",
           "EXTENSIONS": {
