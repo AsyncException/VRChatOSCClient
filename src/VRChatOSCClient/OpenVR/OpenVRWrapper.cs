@@ -5,17 +5,14 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Valve.VR;
 using VRChatOSCClient.TaskExtensions;
-using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.OpenVR;
 
-public class OpenVRWrapper : IAsyncDisposable
+public class OpenVrWrapper : IAsyncDisposable
 {
     private readonly string _appId;
     private readonly string _appManifestPath;
-    private readonly AppManifest _appManifest;
-    private readonly ILogger<OpenVRWrapper> _logger;
-    private readonly IOptions<OpenVRWrapperSettings>? _options;
+    private readonly ILogger<OpenVrWrapper> _logger;
     private readonly Channel<VREvent_t> _eventChannel = Channel.CreateUnbounded<VREvent_t>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
     /// <summary>
@@ -33,24 +30,24 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <summary>
     /// Gets called when the SteamVR client is found and events are being received
     /// </summary>
-    public event Func<CancellationToken, Task> OnSteamVRFound { add => _onSteamVRFound.Add(value); remove => _onSteamVRFound.Remove(value); }
-    private readonly AsyncEvent<Func<CancellationToken, Task>> _onSteamVRFound = new();
+    public event Func<CancellationToken, Task> OnSteamVrFound { add => _onSteamVrFound.Add(value); remove => _onSteamVrFound.Remove(value); }
+    private readonly AsyncEvent<Func<CancellationToken, Task>> _onSteamVrFound = new();
 
     public CVRApplications Applications => Valve.VR.OpenVR.Applications;
     public CVRSystem System => Valve.VR.OpenVR.System;
     public bool AutoLaunch { get => Applications.GetApplicationAutoLaunch(_appId); set => Applications.SetApplicationAutoLaunch(_appId, value); }
 
-    private CancellationTokenSource _cancellationTokenSource = new();
+    private readonly CancellationTokenSource _cancellationTokenSource = new();
+    
     private Task _eventReceiverTask = Task.CompletedTask;
     private Task _dequeueTask = Task.CompletedTask;
 
-    public OpenVRWrapper(ILogger<OpenVRWrapper> logger, IOptions<OpenVRWrapperSettings> options) {
+    public OpenVrWrapper(ILogger<OpenVrWrapper> logger, IOptions<OpenVrWrapperSettings> options) {
         _logger = logger;
-        _options = options;
         _appManifestPath = ValidateManifestPath(options);
-        _appManifest = GetAppManifest(_appManifestPath);
+        var appManifest = GetAppManifest(_appManifestPath);
 
-        _appId = _appManifest.Applications.Count > 0 ? _appManifest.Applications[0].AppKey : throw new Exception("Manifest dos not contain any applications");
+        _appId = appManifest.Applications.Count > 0 ? appManifest.Applications[0].AppKey : throw new Exception("Manifest dos not contain any applications");
     }
 
     /// <summary>
@@ -64,7 +61,6 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <summary>
     /// Starts openvr service and wait for openvr to connect.
     /// </summary>
-    /// <param name="token">A cancellation token that can be used to cancel the operation before it completes.</param>
     /// <returns>A task that represents the asynchronous start and wait operation.</returns>
     public async Task StartAndWaitAsync() => await InternalStart(_cancellationTokenSource.Token);
 
@@ -73,22 +69,23 @@ public class OpenVRWrapper : IAsyncDisposable
     /// </summary>
     /// <param name="token"></param>
     /// <returns></returns>
-    /// <exception cref="OpenVRException">Thrown when an error occures while connecting</exception>
+    /// <exception cref="OpenVrException">Thrown when an error occures while connecting</exception>
     private async Task InternalStart(CancellationToken token) {
-        _logger.LogStartingOpenVRService();
+        _logger.LogInformation("Starting OpenVR Service");
         try {
+            var err = EVRInitError.None;
+            
             while (!token.IsCancellationRequested) {
-                EVRInitError err = EVRInitError.None;
                 Valve.VR.OpenVR.Init(ref err, EVRApplicationType.VRApplication_Background);
 
                 if (err == EVRInitError.None) {
                     break; //successful start
                 }
 
-                if (err != EVRInitError.Init_NoServerForBackgroundApp) {
-                    _logger.LogIntializationError(err);
-                    throw new OpenVRException("Error occured while initializing OpenVR`", err);
-                }
+                if (err == EVRInitError.Init_NoServerForBackgroundApp) continue;
+                
+                _logger.LogError("Error occured while initializing OpenVR, error: {err}", err);
+                throw new OpenVrException("Error occured while initializing OpenVR`", err);
             }
 
             ValidateInstalled(_logger, Applications, _appId, _appManifestPath);
@@ -96,7 +93,7 @@ public class OpenVRWrapper : IAsyncDisposable
             _eventReceiverTask = StartReceivingAsync();
             _dequeueTask = StartDequeueAsync();
 
-            await _onSteamVRFound.InvokeAsync(token);
+            await _onSteamVrFound.InvokeAsync(token);
         }
         catch (OperationCanceledException) { }
     }
@@ -106,15 +103,15 @@ public class OpenVRWrapper : IAsyncDisposable
     /// </summary>
     /// <returns></returns>
     public async Task StopAsync() {
-        _logger.LogStoppingOpenVRService();
-        _cancellationTokenSource.Cancel();
+        _logger.LogInformation("Stopping OpenVR Service");
+        await _cancellationTokenSource.CancelAsync();
 
         try {
             await Task.WhenAll(_eventReceiverTask, _dequeueTask);
         }
         catch (OperationCanceledException) { }
-        catch (Exception e) {
-            _logger.LogStoppingError(e);
+        catch (Exception e) {   
+            _logger.LogError(e, "Error occurred while stopping OpenVR Service");
         }
     }
 
@@ -132,7 +129,7 @@ public class OpenVRWrapper : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception e) {
-            _logger.LogReceivingError(e);
+            _logger.LogError(e, "Error occurred while receiving SteamVR events");
             throw;
         }
 
@@ -145,22 +142,22 @@ public class OpenVRWrapper : IAsyncDisposable
     private async Task StartDequeueAsync() {
         while (!_cancellationTokenSource.IsCancellationRequested) {
             try {
-                VREvent_t vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
+                var vrevent = await _eventChannel.Reader.ReadAsync(_cancellationTokenSource.Token);
 
                 if (vrevent.eventType == 700) {
-                    // !!! its important not to await this. If this is awaited the StopAsync may be called and it will hang because the StartDequeueAsync will never exit as its busy with awaiting the StopAsync method.
+                    // !!! its important not to await this. If this is awaited the StopAsync may be called and will hang because the StartDequeueAsync will never exit as its busy with awaiting the StopAsync method.
                     _ = Task.Run(async () => await _onShutReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token));
                     break;
                 }
 
-                Task eventCall = vrevent.eventType switch {
+                var eventCall = vrevent.eventType switch {
                     _ => _onEventReceived.InvokeAsync(vrevent, _cancellationTokenSource.Token)
                 };
 
                 await eventCall;
             }
             catch (Exception e) {
-                _logger.LogDequeueError(e);
+                _logger.LogError(e, "Error occurred while dequeueing SteamVR events");
                 throw;
             }
         }
@@ -172,12 +169,12 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <param name="options"></param>
     /// <returns></returns>
     /// <exception cref="Exception"></exception>
-    private static string ValidateManifestPath(IOptions<OpenVRWrapperSettings> options) {
+    private static string ValidateManifestPath(IOptions<OpenVrWrapperSettings> options) {
         if (options is null) {
             throw new Exception("No settings were provided");
         }
 
-        string appManifestPath = options.Value.ManifestPath;
+        var appManifestPath = options.Value.ManifestPath;
         if (string.IsNullOrEmpty(appManifestPath)) {
             throw new Exception("Manifest path was empty");
         }
@@ -196,7 +193,7 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <returns></returns>
     /// <exception cref="Exception"></exception>
     private static AppManifest GetAppManifest(string appManifestPath) {
-        using FileStream stream = File.OpenRead(appManifestPath);
+        using var stream = File.OpenRead(appManifestPath);
         return JsonSerializer.Deserialize(stream, AppManifestTypeInfo.Default.AppManifest) ?? throw new Exception("Could not deserialize app manifest");
     }
 
@@ -208,15 +205,17 @@ public class OpenVRWrapper : IAsyncDisposable
     /// <param name="appId"></param>
     /// <param name="appManifestPath"></param>
     /// <exception cref="Exception"></exception>
-    private static void ValidateInstalled(ILogger<OpenVRWrapper> logger, CVRApplications applications, string appId, string appManifestPath) {
-        if (!applications.IsApplicationInstalled(appId)) {
-            logger.LogInstallingManifest();
-            EVRApplicationError addManifestErr = applications.AddApplicationManifest(appManifestPath, false);
-            if (addManifestErr != EVRApplicationError.None) {
-                logger.LogInstallingManifestError(addManifestErr);
-                throw new Exception($"Unable to install app.vrmanifest, error: {addManifestErr}");
-            }
-        }
+    private static void ValidateInstalled(ILogger<OpenVrWrapper> logger, CVRApplications applications, string appId, string appManifestPath)
+    {
+        if (applications.IsApplicationInstalled(appId)) return;
+        
+        logger.LogInformation("Installing app.vrmanifest");
+        var addManifestErr = applications.AddApplicationManifest(appManifestPath, false);
+
+        if (addManifestErr == EVRApplicationError.None) return;
+        
+        logger.LogError("Unable to install app.vrmanifest, error: {err}", addManifestErr);
+        throw new Exception($"Unable to install app.vrmanifest, error: {addManifestErr}");
     }
 
     public async ValueTask DisposeAsync() {
@@ -225,39 +224,12 @@ public class OpenVRWrapper : IAsyncDisposable
     }
 }
 
-public class OpenVRWrapperSettings
+public class OpenVrWrapperSettings
 {
     public string ManifestPath { get; set; } = string.Empty;
 }
 
-public class OpenVRException(string message, EVRInitError err) : Exception(message)
+public class OpenVrException(string message, EVRInitError err) : Exception(message)
 {
     public EVRInitError Error { get; init; } = err;
-}
-
-public static partial class OpenVRWrapperLogger
-{
-    [LoggerMessage(Level = LogLevel.Information, Message = "Starting OpenVR Service")]
-    public static partial void LogStartingOpenVRService(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Stopping OpenVR Service")]
-    public static partial void LogStoppingOpenVRService(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Error occured while initializing OpenVR, error: {err}")]
-    public static partial void LogIntializationError(this ILogger logger, EVRInitError err);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Error occurred while stopping OpenVRWrapper")]
-    public static partial void LogStoppingError(this ILogger logger, Exception ex);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Error occurred while receiving SteamVR events")]
-    public static partial void LogReceivingError(this ILogger logger, Exception ex);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Error occurred while dequeueing SteamVR events")]
-    public static partial void LogDequeueError(this ILogger logger, Exception ex);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Installing app.vrmanifest")]
-    public static partial void LogInstallingManifest(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Unable to install app.vrmanifest, error: {err}")]
-    public static partial void LogInstallingManifestError(this ILogger logger, EVRApplicationError err);
 }

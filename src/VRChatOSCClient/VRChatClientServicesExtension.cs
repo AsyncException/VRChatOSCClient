@@ -16,9 +16,9 @@ public static class VRChatClientServicesExtension
 
         public IServiceCollection AddVRChatClient(string serviceName, IPAddress address, ServiceLifetime lifetime = ServiceLifetime.Singleton) {
             services.AddTransient<Settings>(_ => new Settings(serviceName, address));
-            services.AddHttpClient(nameof(VRChatDataFetcher), client => VRChatDataFetcher.ConfigureHTTPClient(client, serviceName));
+            services.AddHttpClient(nameof(VrChatDataFetcher), client => VrChatDataFetcher.ConfigureHttpClient(client, serviceName));
             services.AddTransient<OscQueryService>();
-            services.AddTransient<VRChatDataFetcher>();
+            services.AddTransient<VrChatDataFetcher>();
             services.AddTransient<HostInfoHttpServer>();
             services.AddTransient<Multicaster>();
             services.AddTransient<OscCommunicator>();
@@ -28,16 +28,16 @@ public static class VRChatClientServicesExtension
         }
 
         public IServiceCollection AddOpenVRClient(IConfiguration configuration) {
-            services.Configure<OpenVRWrapperSettings>(configuration);
-            services.AddOptions<OpenVRWrapperSettings>();
-            services.AddSingleton<OpenVRWrapper>();
+            services.Configure<OpenVrWrapperSettings>(configuration);
+            services.AddOptions<OpenVrWrapperSettings>();
+            services.AddSingleton<OpenVrWrapper>();
 
             return services;
         }
 
-        public IServiceCollection AddOpenVRClient(Action<OpenVRWrapperSettings> settingsFactory) {
-            services.Configure<OpenVRWrapperSettings>(settingsFactory);
-            services.AddSingleton<OpenVRWrapper>();
+        public IServiceCollection AddOpenVRClient(Action<OpenVrWrapperSettings> settingsFactory) {
+            services.Configure<OpenVrWrapperSettings>(settingsFactory);
+            services.AddSingleton<OpenVrWrapper>();
 
             return services;
         }

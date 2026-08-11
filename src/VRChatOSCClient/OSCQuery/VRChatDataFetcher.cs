@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace VRChatOSCClient.OSCQuery;
@@ -9,84 +10,78 @@ namespace VRChatOSCClient.OSCQuery;
 /// </summary>
 /// <param name="logger"></param>
 /// <param name="factory"></param>
-internal class VRChatDataFetcher(ILogger<VRChatDataFetcher> logger, IHttpClientFactory factory) {
-    private readonly ILogger<VRChatDataFetcher> _logger = logger;
-    private readonly IHttpClientFactory _clientFactory = factory;
-
-    public static void ConfigureHTTPClient(HttpClient client, string serviceName) {
+internal class VrChatDataFetcher(ILogger<VrChatDataFetcher> logger, IHttpClientFactory factory) {
+    
+    public static void ConfigureHttpClient(HttpClient client, string serviceName) {
         client.DefaultRequestHeaders.UserAgent.Clear();
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", $"OscQuery-{serviceName}");
-        client.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
+        client.DefaultRequestHeaders.CacheControl = new CacheControlHeaderValue { NoCache = true };
     }
 
     public async Task<IPEndPoint> GetConnectionEndpoint(IPAddress address, ushort port) {
         try {
-            HttpClient client = _clientFactory.CreateClient(nameof(VRChatDataFetcher));
-            UriBuilder uri = new("http", address.ToString(), port, "", "?HOST_INFO");
+            using var client = factory.CreateClient(nameof(VrChatDataFetcher));
+            var uri = new UriBuilder("http", address.ToString(), port, "", "?HOST_INFO");
 
-            string stringifiedData = await client.GetStringAsync(uri.Uri);
-            JsonElement data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
+            var stringifiedData = await client.GetStringAsync(uri.Uri);
+            var data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
 
-            string? oscIpString = data.GetProperty("OSC_IP").GetString();
-            if (string.IsNullOrEmpty(oscIpString) || !IPAddress.TryParse(oscIpString, out IPAddress? oscIP)) {
-                _logger.LogMalformedIP();
+            var oscIpString = data.GetProperty("OSC_IP").GetString();
+            if (string.IsNullOrEmpty(oscIpString) || !IPAddress.TryParse(oscIpString, out var oscIp)) {
+                logger.LogError("Received empty or malformed IPAddress from host");
                 throw new Exception("Received empty or malformed IPAddress from HOST_INFO");
             }
 
-            if(!data.GetProperty("OSC_PORT").TryGetInt32(out int oscPort)) {
-                _logger.LogMalformedPort();
-                throw new Exception("Received empty or malformed port from HOST_INFO");
-            }
-
-            return new IPEndPoint(oscIP, oscPort);
+            if (data.GetProperty("OSC_PORT").TryGetInt32(out var oscPort))
+                return new IPEndPoint(oscIp, oscPort);
+            
+            logger.LogError("Received empty or malformed Port from host");
+            throw new Exception("Received empty or malformed port from HOST_INFO");
         }
         catch (Exception ex) {
-            _logger.LogConnectionEndpointError(ex);
+            logger.LogError(ex, "Exception occured while fetching connection endpoint");
             throw;
         }
     }
 
     public async Task<Dictionary<string, object?>> GetAvatarParameters(IPAddress address, ushort port, CancellationToken token) {
-        HttpClient client = _clientFactory.CreateClient(nameof(VRChatDataFetcher));
-        UriBuilder uri = new("http", address.ToString(), port);
+        var client = factory.CreateClient(nameof(VrChatDataFetcher));
+        var uri = new UriBuilder("http", address.ToString(), port);
 
-        string stringifiedData = await client.GetStringAsync(uri.Uri, token);
+        var stringifiedData = await client.GetStringAsync(uri.Uri, token);
 
         Dictionary<string, object?> parameters = [];
-        JsonElement data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
-        foreach(JsonProperty element in data.GetProperty("CONTENTS").GetProperty("avatar").GetProperty("CONTENTS").GetProperty("parameters").GetProperty("CONTENTS").EnumerateObject()) {
+        var data = JsonSerializer.Deserialize<JsonElement>(stringifiedData);
+        foreach(var element in data.GetProperty("CONTENTS").GetProperty("avatar").GetProperty("CONTENTS").GetProperty("parameters").GetProperty("CONTENTS").EnumerateObject()) {
             ReadJsonProperty(element, parameters);
         }
 
         return parameters;
     }
     
-    private static void ReadJsonProperty(JsonProperty property, Dictionary<string, object?> parameters) {
-        int access = property.Value.GetProperty("ACCESS").GetInt32();
-        if(access == 3) {
-            parameters.Add(property.Name, property.Value.GetProperty("TYPE").GetString() switch {
-                "T" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetBoolean(),
-                "f" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetSingle(),
-                "i" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetInt32(),
-                "s" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetString(),
-                _ => null
-            });
-        }
-        else if(access == 0) {
-            foreach(JsonProperty subProperty in property.Value.GetProperty("CONTENTS").EnumerateObject()) {
-                ReadJsonProperty(subProperty, parameters);
+    private static void ReadJsonProperty(JsonProperty property, Dictionary<string, object?> parameters)
+    {
+        var access = property.Value.GetProperty("ACCESS").GetInt32();
+
+        switch (access)
+        {
+            case 3:
+                parameters.Add(property.Name, property.Value.GetProperty("TYPE").GetString() switch {
+                    "T" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetBoolean(),
+                    "f" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetSingle(),
+                    "i" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetInt32(),
+                    "s" => property.Value.GetProperty("VALUE").EnumerateArray().First().GetString(),
+                    _ => null
+                });
+                break;
+            case 0:
+            {
+                foreach(var subProperty in property.Value.GetProperty("CONTENTS").EnumerateObject()) {
+                    ReadJsonProperty(subProperty, parameters);
+                }
+
+                break;
             }
         }
     }
-}
-
-internal static partial class VRChatDataFetcherLogger {
-    [LoggerMessage(LogLevel.Error, "Received empty or malformed IPAddress from host")]
-    public static partial void LogMalformedIP(this ILogger<VRChatDataFetcher> logger);
-
-    [LoggerMessage(LogLevel.Error, "Received empty or malformed Port from host")]
-    public static partial void LogMalformedPort(this ILogger<VRChatDataFetcher> logger);
-
-    [LoggerMessage(LogLevel.Error, "Exception occured while fetching connection endpoint")]
-    public static partial void LogConnectionEndpointError(this ILogger<VRChatDataFetcher> logger, Exception ex);
 }

@@ -7,8 +7,25 @@ public class AsyncEvent<T> where T : class
     private readonly Lock _lock = new();
     private ImmutableArray<T> _subscriptions = [];
 
-    public bool HasSubscribers => _subscriptions.Length != 0;
-    public IReadOnlyList<T> Subscriptions => _subscriptions;
+    public bool HasSubscribers
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _subscriptions.Length != 0;
+            }
+        }
+    }
+    public IReadOnlyList<T> Subscriptions {
+        get
+        {
+            lock (_lock)
+            {
+                return _subscriptions;
+            }
+        }
+    }
 
     public void Add(T subscriber) {
         lock (_lock) {
@@ -27,10 +44,10 @@ internal static class AsyncEventExtensions
 {
     extension (AsyncEvent<Func<Task>> eventHandler) {
         public async Task InvokeAsync() {
-            IReadOnlyList<Func<Task>> subscribers = eventHandler.Subscriptions;
-            Task[] tasks = new Task[subscribers.Count];
+            var subscribers = eventHandler.Subscriptions;
+            var tasks = new Task[subscribers.Count];
 
-            for (int i = 0; i < subscribers.Count; i++) {
+            for (var i = 0; i < subscribers.Count; i++) {
                 tasks[i] = subscribers[i].Invoke();
             }
 
@@ -41,10 +58,10 @@ internal static class AsyncEventExtensions
     extension<T>(AsyncEvent<Func<T, Task>> eventHandler)
     {
         public async Task InvokeAsync(T arg) {
-            IReadOnlyList<Func<T, Task>> subscribers = eventHandler.Subscriptions;
-            Task[] tasks = new Task[subscribers.Count];
+            var subscribers = eventHandler.Subscriptions;
+            var tasks = new Task[subscribers.Count];
 
-            for (int i = 0; i < subscribers.Count; i++) {
+            for (var i = 0; i < subscribers.Count; i++) {
                 tasks[i] = subscribers[i].Invoke(arg);
             }
 
@@ -55,10 +72,10 @@ internal static class AsyncEventExtensions
     extension<T1, T2>(AsyncEvent<Func<T1, T2, Task>> eventHandler)
     {
         public async Task InvokeAsync(T1 arg1, T2 arg2) {
-            IReadOnlyList<Func<T1, T2, Task>> subscribers = eventHandler.Subscriptions;
-            Task[] tasks = new Task[subscribers.Count];
+            var subscribers = eventHandler.Subscriptions;
+            var tasks = new Task[subscribers.Count];
 
-            for (int i = 0; i < subscribers.Count; i++) {
+            for (var i = 0; i < subscribers.Count; i++) {
                 tasks[i] = subscribers[i].Invoke(arg1, arg2);
             }
 

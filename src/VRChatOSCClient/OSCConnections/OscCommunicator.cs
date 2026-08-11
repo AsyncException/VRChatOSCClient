@@ -11,8 +11,6 @@ namespace VRChatOSCClient.OSCConnections;
 // A class responsible for sending and receiving OSC messages and also fetch current parameters
 internal class OscCommunicator(ILogger<OscCommunicator> logger)
 {
-    private readonly ILogger<OscCommunicator> _logger = logger;
-
     private RunningState? _state;
     
     private MessageFilter _messageFilter = new();
@@ -31,7 +29,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     private readonly Channel<Message> _messageChannel = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly SemaphoreSlim _semaphore = new(1);
 
-    public async Task StartAsync(VRChatConnectionInfo connectionInfo, MessageFilter messageFilter, CancellationToken token) {
+    public async Task StartAsync(VrChatConnectionInfo connectionInfo, MessageFilter messageFilter, CancellationToken token) {
         if(_state is not null) {
             throw new InvalidOperationException("OSCCommunicator is already running. Please stop it before starting again.");
         }
@@ -41,14 +39,14 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         await _semaphore.WaitAsync(token);
 
         try {
-            _logger.LogStartingOscCommunicator();
+            logger.LogInformation("Starting OSCCommunicator");
             _messageFilter = messageFilter;
 
             try {
                 await state.SenderSocket.ConnectAsync(connectionInfo.SendEndpoint, token).ConfigureAwait(false);
             }
             catch (Exception ex) {
-                _logger.LogError(ex, "Failed to connect sender socket to {SendEndpoint}", connectionInfo.SendEndpoint);
+                logger.LogError(ex, "Failed to connect sender socket to {SendEndpoint}", connectionInfo.SendEndpoint);
                 _semaphore.Release();
                 throw;
             }
@@ -57,7 +55,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 state.ReceiverSocket.Bind(connectionInfo.ReceiveEndpoint);
             }
             catch (Exception ex) {
-                _logger.LogFailedReceiverSocketCreate(ex, connectionInfo.ReceiveEndpoint);
+                logger.LogError(ex, "Failed to bind receiver socket to {ReceiveEndpoint}", connectionInfo.ReceiveEndpoint);
                 _semaphore.Release();
                 throw;
             }
@@ -70,7 +68,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             }
         }
         catch (Exception ex) {
-            _logger.LogFailedReceiverSocketCreate(ex, connectionInfo.ReceiveEndpoint);
+            logger.LogError(ex, "Failed to bind receiver socket to {ReceiveEndpoint}", connectionInfo.ReceiveEndpoint);
             _semaphore.Release();
         }
     }
@@ -82,11 +80,11 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
 
         try {
-            _logger.LogStoppingOscCommunicator();
+            logger.LogInformation("Stopping OSCCommunicator");
 
             state.SenderSocket.Close();
             state.ReceiverSocket.Close();
-            state.CTS.Cancel();
+            await state.Cts.CancelAsync();
 
             await _receiverTask;
             await _dequeueTask;
@@ -94,7 +92,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             state.Dispose();
         }
         catch (Exception ex) {
-            _logger.LogFailedReceiverSocketDestroy(ex);
+            logger.LogError(ex, "Failed to disconnect receiver socket");
         }
     }
 
@@ -105,19 +103,19 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
         }
         
         Memory<byte> buffer = new byte[4096];
-        while (!state.CTS.IsCancellationRequested) {
+        while (!state.Cts.IsCancellationRequested) {
             try {
-                _ = await state.ReceiverSocket.ReceiveAsync(buffer, state.CTS.Token);
-                Message message = MessageParser.Parse(buffer);
+                _ = await state.ReceiverSocket.ReceiveAsync(buffer, state.Cts.Token);
+                var message = MessageParser.Parse(buffer);
                 await _messageChannel.Writer.WriteAsync(message);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) {
-                _logger.LogReceivingError(ex);
+                logger.LogError(ex, "Exception occured while receiving and parsing message");
             }
         }
 
-        _logger.LogDebug("[OscCommunicator]::StartReceiving exited successfully");
+        logger.LogDebug("[OscCommunicator]::StartReceiving exited successfully");
     }
 
     private async Task StartDequeueAsync() {
@@ -126,10 +124,14 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
             return;
         }
 
-        while (!state.CTS.IsCancellationRequested) {
+        while (!state.Cts.IsCancellationRequested) {
             try {
-                Message message = await _messageChannel.Reader.ReadAsync(state.CTS.Token);
-                _logger.LogMessageReceived(message.Address, message.Arguments[0]);
+                var message = await _messageChannel.Reader.ReadAsync(state.Cts.Token);
+
+                if (logger.IsEnabled(LogLevel.Trace))
+                {
+                    logger.LogTrace("Received message: {address}: {value}.", message.Address, message.Arguments[0]);
+                }
 
                 if (!_messageFilter.IsAddressPatternMatch(message)) {
                     continue;
@@ -138,7 +140,7 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
                 if (message.Address.StartsWith(ParameterChangedMessage.PARAMETER_CHANGED_ADDRESS)) {
                     ParameterChangedMessage parameterMessage = new(message);
                     if (_messageFilter.IsParameterPatternMatch(parameterMessage)) {
-                        await _onParameterChanged.InvokeAsync(parameterMessage, state.CTS.Token);
+                        await _onParameterChanged.InvokeAsync(parameterMessage, state.Cts.Token);
                     }
 
                     continue;
@@ -146,19 +148,19 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
 
                 if (message.Address.StartsWith(AvatarChangedMessage.AVATAR_CHANGED_ADDRESS)) {
                     AvatarChangedMessage avatarMessage = new(message);
-                    await _onAvatarChanged.InvokeAsync(avatarMessage, state.CTS.Token);
+                    await _onAvatarChanged.InvokeAsync(avatarMessage, state.Cts.Token);
                     continue;
                 }
 
-                await _onMessageReceived.InvokeAsync(message, state.CTS.Token);
+                await _onMessageReceived.InvokeAsync(message, state.Cts.Token);
             }
             catch (OperationCanceledException) { } // Ignore operation cancellation
             catch (Exception ex) {
-                _logger.LogDequeueingError(ex);
+                logger.LogError(ex, "Exception occured while receiving and parsing message");
             }
         }
 
-        _logger.LogDebug("[OscCommunicator]::StartDequeueAsync exited successfully");
+        logger.LogDebug("[OscCommunicator]::StartDequeueAsync exited successfully");
     }
 
     /// <summary>
@@ -167,54 +169,19 @@ internal class OscCommunicator(ILogger<OscCommunicator> logger)
     /// <param name="message"></param>
     public void SendMessage(Message message) {
         var state = _state;
-        if(state is null) {
-            return;
-        }
-
-        state.SenderSocket.Send(MessageParser.Serialize(message).Span);
+        state?.SenderSocket.Send(MessageParser.Serialize(message).Span);
     }
 
 
     private class RunningState : IDisposable {
-        public Socket SenderSocket { get; }
-        public Socket ReceiverSocket { get; }
-        public CancellationTokenSource CTS { get; }
-
-        public RunningState() {
-            SenderSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            ReceiverSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            CTS = new();
-        }
+        public Socket SenderSocket { get; } = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        public Socket ReceiverSocket { get; } = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        public CancellationTokenSource Cts { get; } = new();
 
         public void Dispose() {
             SenderSocket.Dispose();
             ReceiverSocket.Dispose();
-            CTS.Dispose();
+            Cts.Dispose();
         }
     }
-}
-
-internal static partial class OscCommunicatorLogger
-{
-
-    [LoggerMessage(LogLevel.Information, "Starting OSCCommunicator")]
-    public static partial void LogStartingOscCommunicator(this ILogger<OscCommunicator> logger);
-
-    [LoggerMessage(LogLevel.Information, "Stopping OSCCommunicator")]
-    public static partial void LogStoppingOscCommunicator(this ILogger<OscCommunicator> logger);
-
-    [LoggerMessage(LogLevel.Error, "Failed to bind receiver socket to {ReceiveEndpoint}")]
-    public static partial void LogFailedReceiverSocketCreate(this ILogger<OscCommunicator> logger, Exception exception, IPEndPoint ReceiveEndpoint);
-
-    [LoggerMessage(LogLevel.Error, "Failed to disconnect receiver socket")]
-    public static partial void LogFailedReceiverSocketDestroy(this ILogger<OscCommunicator> logger, Exception exception);
-
-    [LoggerMessage(LogLevel.Trace, "Received message: {address}: {value}.")]
-    public static partial void LogMessageReceived(this ILogger<OscCommunicator> logger, string address, object? value);
-
-    [LoggerMessage(LogLevel.Error, "Exception occured while receiving and parsing message")]
-    public static partial void LogDequeueingError(this ILogger<OscCommunicator> logger, Exception exception);
-
-    [LoggerMessage(LogLevel.Error, "Exception occured while receiving and parsing message")]
-    public static partial void LogReceivingError(this ILogger<OscCommunicator> logger, Exception exception);
 }

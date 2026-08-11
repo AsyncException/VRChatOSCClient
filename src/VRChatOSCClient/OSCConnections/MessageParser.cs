@@ -3,7 +3,8 @@ using System.Diagnostics;
 using System.Text;
 
 namespace VRChatOSCClient.OSCConnections;
-internal class MessageParser
+
+internal static class MessageParser
 {
     /// Example of data packages
     /// The first part is the address as string, Then a spacer, then the type of parameter in the second index, another spacer and then the value of the type.
@@ -18,14 +19,14 @@ internal class MessageParser
     /// <returns></returns>
     public static Message Parse(Memory<byte> data) {
         try {
-            SpanReader stream = new(data);
-            string address = stream.ReadString();
+            var stream = new SpanReader(data);
+            var address = stream.ReadString();
             Span<byte> parametersTypes = stackalloc byte[stream.CountParameterTypes()];
             stream.ReadParameterType(parametersTypes);
 
-            object?[] parameters = new object?[parametersTypes.Length];
+            var parameters = new object?[parametersTypes.Length];
 
-            for (int i = 0; i < parameters.Length; i++) {
+            for (var i = 0; i < parameters.Length; i++) {
                 parameters[i] = parametersTypes[i] switch {
                     70 => false,
                     73 => float.PositiveInfinity,
@@ -51,13 +52,13 @@ internal class MessageParser
     /// <param name="message"></param>
     /// <returns></returns>
     public static Memory<byte> Serialize(Message message) {
-        SpanWriter writer = new(new byte[GetLength(message)]);
+        var writer = new SpanWriter(new byte[GetLength(message)]);
         writer.WriteString(message.Address);
 
         Span<byte> parameterTypes = stackalloc byte[message.Arguments.Length];
         //write parameter types
-        for (int i = 0; i < message.Arguments.Length; i++) {
-            object? arg = message.Arguments[i];
+        for (var i = 0; i < message.Arguments.Length; i++) {
+            var arg = message.Arguments[i];
             if(arg is null or not (string or float or int or bool)) {
                 continue;
             }
@@ -73,7 +74,7 @@ internal class MessageParser
 
         writer.WriteParameterType(parameterTypes);
 
-        foreach (object? param in message.Arguments) {
+        foreach (var param in message.Arguments) {
             if(param is null or not (string or float or int)) { //bools can be ignored
                 continue;
             }
@@ -97,22 +98,16 @@ internal class MessageParser
     }
 
     private static int GetLength(Message message) {
-        int addressLength = (Encoding.ASCII.GetByteCount(message.Address) + 4) & ~3;
-        int parameterTypesLength = (message.Arguments.Length + 5) & ~3; ;
-        int parameterLength = 0;
-        foreach(object? param in message.Arguments) {
-            if(param is null) {
-                continue;
-            }
-
-            parameterLength += param switch {
+        var addressLength = (Encoding.ASCII.GetByteCount(message.Address) + 4) & ~3;
+        var parameterTypesLength = (message.Arguments.Length + 5) & ~3; ;
+        var parameterLength = message.Arguments.OfType<object>()
+            .Sum(param => param switch
+            {
                 string str => (Encoding.ASCII.GetByteCount(str) + 4) & ~3,
                 float f => 4,
                 int i => 4,
-                bool b => 0,
                 _ => 0
-            };
-        }
+            });
 
         return addressLength + parameterTypesLength + parameterLength;
     }
@@ -121,9 +116,8 @@ internal class MessageParser
 public struct SpanReader(Memory<byte> buffer)
 {
     private int _position = 0;
-    private readonly Memory<byte> _memory = buffer;
-    private readonly Span<byte> Span => _memory.Span;
-    public readonly int Length => _memory.Length;
+    private readonly Span<byte> Span => buffer.Span;
+    public readonly int Length => buffer.Length;
 
     private readonly int IndexOf(byte value) => Span[_position..].IndexOf(value);
 
@@ -137,42 +131,41 @@ public struct SpanReader(Memory<byte> buffer)
             return 0;
         }
 
-        int nextIndex = IndexOf(0);
+        var nextIndex = IndexOf(0);
         return nextIndex - 1; //Remove 1 extra for the parameter identifier
     }
-    public void ReadParameterType(Span<byte> buffer) {
+    public void ReadParameterType(Span<byte> bufferSpan) {
         _position += 1; // Skip the 44 identifier for parameter types
-        CopyTo(buffer);
+        CopyTo(bufferSpan);
         _position = (_position + 4) & ~3;
     }
 
     public string ReadString() {
         int nextIndex = IndexOf(0);
-        Span<byte> buffer = stackalloc byte[nextIndex];
-        CopyTo(buffer);
+        Span<byte> bufferSpan = stackalloc byte[nextIndex];
+        CopyTo(bufferSpan);
 
-        string result = Encoding.ASCII.GetString(buffer);
+        var result = Encoding.ASCII.GetString(bufferSpan);
         _position = (_position + 4) & ~3;
         return result;
     }
 
     public int ReadInt32() {
-        Span<byte> buffer = stackalloc byte[4];
-        CopyTo(buffer);
-        return BinaryPrimitives.ReadInt32BigEndian(buffer);
+        Span<byte> bufferSpan = stackalloc byte[4];
+        CopyTo(bufferSpan);
+        return BinaryPrimitives.ReadInt32BigEndian(bufferSpan);
     }
 
     public float ReadFloat() {
-        Span<byte> buffer = stackalloc byte[4];
-        CopyTo(buffer);
-        return BinaryPrimitives.ReadSingleBigEndian(buffer);
+        Span<byte> bufferSpan = stackalloc byte[4];
+        CopyTo(bufferSpan);
+        return BinaryPrimitives.ReadSingleBigEndian(bufferSpan);
     }
 }
 
 public struct SpanWriter(Memory<byte> buffer) {
     private int _position = 0;
-    private readonly Memory<byte> _memory = buffer;
-    private readonly Span<byte> Span => _memory.Span;
+    private readonly Span<byte> Span => buffer.Span;
 
     public void WriteString(string input) {
         _position += Encoding.ASCII.GetBytes(input, Span[_position..]);
@@ -198,7 +191,7 @@ public struct SpanWriter(Memory<byte> buffer) {
         _position = (_position + 4) & ~3; // Align to 4 bytes
     }
 
-    public readonly Memory<byte> GetFinishedMemory() => _memory[.._position];
+    public readonly Memory<byte> GetFinishedMemory() => buffer[.._position];
 
     
 }
@@ -208,7 +201,7 @@ file static class SpanExtensions
     extension(ReadOnlySpan<byte> span)
     {
         public int IndexOf(byte value) {
-            for (int i = 0; i < span.Length; i++) {
+            for (var i = 0; i < span.Length; i++) {
                 if (span[i] == value) {
                     return i;
                 }

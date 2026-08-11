@@ -3,7 +3,6 @@ using Makaretu.Dns.Resolving;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using VRChatOSCClient.TaskExtensions;
-using VRChatOSCClient.Utilities;
 using static System.String;
 
 namespace VRChatOSCClient.MulticastServices;
