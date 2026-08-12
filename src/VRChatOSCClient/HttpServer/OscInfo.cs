@@ -1,8 +1,7 @@
 ﻿namespace VRChatOSCClient.HttpServer;
 
-internal class OscInfo() {
-    public static string Info => INFO;
-
+internal static class OscInfo {
+  
     private const string INFO = """
         {
           "DESCRIPTION": "root node",
@@ -25,5 +24,5 @@ internal class OscInfo() {
         }
         """;
 
-    public static string ToJson() => Info;
+    public static string ToJson() => INFO;
 }

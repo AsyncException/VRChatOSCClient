@@ -14,9 +14,7 @@
 
 #if !OPENVR_XR_API
 
-using System;
 using System.Runtime.InteropServices;
-using Valve.VR;
 
 #if UNITY_5_3_OR_NEWER
 using UnityEngine;

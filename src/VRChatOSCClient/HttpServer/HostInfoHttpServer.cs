@@ -1,8 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Text;
-using Tmds.Linux;
-using VRChatOSCClient.Utilities;
 
 namespace VRChatOSCClient.HttpServer;
 
@@ -10,10 +8,8 @@ namespace VRChatOSCClient.HttpServer;
 /// Provides an HTTP Server that provides host information through a REST api call
 /// </summary>
 /// <param name="logger"></param>
-internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposable
+internal sealed class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IAsyncDisposable
 {
-    private readonly ILogger<HostInfoHttpServer> _logger = logger;
-
     private RunningState? _state;
 
     private Task _serverTask = Task.CompletedTask;
@@ -26,7 +22,7 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// <param name="responseProvider"></param>
     /// <param name="token"></param>
     public void Start(string binding, ushort port, Func<bool, string> responseProvider, CancellationToken token) {
-        _logger.LogHostStarting();
+        logger.LogHostStarting();
         
         var state = new RunningState(binding, port, responseProvider);
         state.HttpListener.Start();
@@ -38,17 +34,18 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// <summary>
     /// Stops the HTTP server and cleans up resources
     /// </summary>
-    /// <param name="token"></param>
     /// <returns></returns>
-    public void Stop() {
+    public async Task StopAsync() {
         var state = _state;
         if(state is null) {
             return;
         }
 
         state.HttpListener.Close();
-        state.CTS.Cancel();
-
+        
+        await state.Cts.CancelAsync();
+        await _serverTask;
+        
         state.Dispose();
         _state = null;
     }
@@ -56,32 +53,28 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// <summary>
     /// Loop that listens for requests
     /// </summary>
-    /// <param name="ct"></param>
     /// <returns></returns>
     private async Task ListenLoopAsync() {
         try {
             var state = _state;
-            if(state is null) {
-                return;
-            }
+            if(state is null) return;
 
-            while (!state.CTS.IsCancellationRequested) {
+            while (!state.Cts.IsCancellationRequested) {
                 try {
                     if (state.HttpListener is null) {
                         throw new InvalidOperationException("Listener is not initialized");
                     }
 
-                    HttpListenerContext? ctx = await state.HttpListener.GetContextAsync().WaitAsync(state.CTS.Token);
+                    var ctx = await state.HttpListener.GetContextAsync().WaitAsync(state.Cts.Token);
                     await HandleContextAsync(ctx);
                 }
                 catch (TaskCanceledException) { }
                 catch (OperationCanceledException) { }
                 catch (HttpListenerException ex) when (ex.ErrorCode == 995) { } // Ignore abort because of thread exit. This is basically the same as OperationCancelledException
-                
             }
         }
         catch (Exception ex) {
-            _logger.LogListeningRequestError(ex);
+            logger.LogListeningRequestError(ex);
         }
     }
 
@@ -91,8 +84,8 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     /// <param name="ctx"></param>
     /// <returns></returns>
     private async Task HandleContextAsync(HttpListenerContext ctx) {
-        HttpListenerRequest req = ctx.Request;
-        HttpListenerResponse res = ctx.Response;
+        var req = ctx.Request;
+        var res = ctx.Response;
 
         var state = _state;
         if(state is null) {
@@ -112,47 +105,43 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
             }
 
             // check if the parameters contain 'HOST_INFO'
-            bool hasHostInfo = !string.IsNullOrEmpty(req.Url.Query) && req.Url.Query.Contains("HOST_INFO", StringComparison.OrdinalIgnoreCase);
+            var hasHostInfo = !string.IsNullOrEmpty(req.Url.Query) && req.Url.Query.Contains("HOST_INFO", StringComparison.OrdinalIgnoreCase);
 
-            _logger.LogAnsweringRequest(ctx.Request.RawUrl);
+            logger.LogAnsweringRequest(ctx.Request.RawUrl);
 
-            string responseString = state.ResponseProvider(hasHostInfo) ?? string.Empty;
+            var responseString = state.ResponseProvider(hasHostInfo);
 
-            byte[] buffer = Encoding.UTF8.GetBytes(responseString);
+            var buffer = Encoding.UTF8.GetBytes(responseString);
             res.StatusCode = (int)HttpStatusCode.OK;
             res.ContentType = "application/json; charset=utf-8";
             res.ContentLength64 = buffer.Length;
 
             // Write body
-            await res.OutputStream.WriteAsync(buffer, state.CTS.Token);
+            await res.OutputStream.WriteAsync(buffer, state.Cts.Token);
             res.Close();
         }
         catch (Exception ex) {
             try {
-                _logger.LogUnableToRespond(ex);
+                logger.LogUnableToRespond(ex);
 
                 res.StatusCode = (int)HttpStatusCode.InternalServerError;
                 res.Close();
             }
-            catch { }
+            catch
+            {
+                // ignored
+            }
         }
     }
 
     #region IDisposable Support
     private bool _disposedValue;
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposedValue) return;
+        await StopAsync();
 
-    protected virtual void Dispose(bool disposing) {
-        if(!_disposedValue) {
-            if (disposing) { }
-            Stop();
-
-            _disposedValue = true;
-        }
-    }
-
-    public void Dispose() {
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);
+        _disposedValue = true;
     }
     #endregion
 
@@ -160,17 +149,17 @@ internal class HostInfoHttpServer(ILogger<HostInfoHttpServer> logger) : IDisposa
     {
         public HttpListener HttpListener { get; }
         public Func<bool, string> ResponseProvider { get; }
-        public CancellationTokenSource CTS { get; }
+        public CancellationTokenSource Cts { get; }
 
         public RunningState(string binding, ushort port, Func<bool, string> responseProvider) {
             HttpListener = new HttpListener();
             HttpListener.Prefixes.Add($"http://{binding}:{port}/");
             ResponseProvider = responseProvider;
-            CTS = new();
+            Cts = new CancellationTokenSource();
         }
 
         public void Dispose() {
-            CTS.Dispose();
+            Cts.Dispose();
         }
     }
 }
@@ -185,7 +174,6 @@ static partial class HostInfoHttpServerLogger {
     [LoggerMessage(Level = LogLevel.Error, Message = "Unable to respond to request")]
     public static partial void LogUnableToRespond(this ILogger<HostInfoHttpServer> logger, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Encountered error while listening for HOST_INFO requests")]
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Encountered error while listening for HOST_INFO requests")]
     public static partial void LogListeningRequestError(this ILogger<HostInfoHttpServer> logger, Exception exception);
-
 }

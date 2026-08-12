@@ -1,5 +1,4 @@
-﻿using System.Security.Cryptography.X509Certificates;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace VRChatOSCClient.OpenVR;
@@ -9,14 +8,14 @@ public record AppManifest(
     [property: JsonPropertyName("applications")] IReadOnlyList<Application> Applications
 ) {
     public void WriteToFile(string path) {
-        string filePath = path.EndsWith("app.vrmanifest") ? path : Path.Combine(path, "app.vrmanifest");
-        string directoryPath = path.EndsWith("app.vrmanifest") ? Path.GetDirectoryName(path)! : path;
+        var filePath = path.EndsWith("app.vrmanifest") ? path : Path.Combine(path, "app.vrmanifest");
+        var directoryPath = path.EndsWith("app.vrmanifest") ? Path.GetDirectoryName(path)! : path;
 
         if (!Directory.Exists(directoryPath)) {
             Directory.CreateDirectory(directoryPath);
         }
 
-        using FileStream stream = File.OpenWrite(filePath);
+        using var stream = File.OpenWrite(filePath);
         JsonSerializer.Serialize(stream, this, AppManifestTypeInfo.Default.AppManifest);
     }
 
@@ -66,7 +65,7 @@ public class AppManifestBuilder {
     public required string Name { get; set; }
     public required string Description { get; set; }
 
-    public AppManifest Build() => new(Source, [new(AppKey, LaunchType, BinaryPathWindows, IsDashboardOverlay, new(new(Name, Description)))]);
+    public AppManifest Build() => new(Source, [new Application(AppKey, LaunchType, BinaryPathWindows, IsDashboardOverlay, new(new(Name, Description)))]);
 }
 
 

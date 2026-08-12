@@ -11,7 +11,7 @@ public class MessageFilter
     /// </summary>
     public bool DisableReceiving { get; set; } = false;
 
-    public Regex? ParameterPattern { get; private set; } = null;
+    public Regex? ParameterPattern { get; private set; }
 
     /// <summary>
     /// Set a pattern for filtering changing parameters. The parameters address will also have to match the <see cref="AddressPattern"/>.
@@ -20,7 +20,7 @@ public class MessageFilter
     public void SetParameterPattern([StringSyntax("Regex")] string pattern) => ParameterPattern = new Regex(pattern, RegexOptions.Compiled | RegexOptions.CultureInvariant);
     internal bool IsParameterPatternMatch(ParameterChangedMessage message) => ParameterPattern is null || ParameterPattern.IsMatch(message.Name);
 
-    public Regex? AddressPattern { get; private set; } = null;
+    public Regex? AddressPattern { get; private set; }
 
     /// <summary>
     /// Set a pattern for filtering messages by their address. If the message is a <see cref="ParameterChangedMessage"/>, the address will also have to match the <see cref="ParameterPattern"/> if parameter changes are enabled."/>

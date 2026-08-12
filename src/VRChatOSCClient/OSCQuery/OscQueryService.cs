@@ -1,6 +1,5 @@
 ﻿using Makaretu.Dns;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using VRChatOSCClient.HttpServer;
@@ -11,64 +10,48 @@ using VRChatOSCClient.TaskExtensions;
 namespace VRChatOSCClient.OSCQuery;
 
 
-internal class OscQueryService
+internal class OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServer httpServer, Multicaster multicaster, Settings settings, VrChatDataFetcher dataFetcher)
 {
-    private readonly Settings _settings;
-    private readonly Multicaster _multicaster;
-    private readonly HostInfoHttpServer _httpServer;
-    private readonly VRChatDataFetcher _dataFetcher;
-    private readonly ILogger<OscQueryService> _logger;
-
-    public int HttpPort { get; init; }
-    public int OscReceivePort { get; init; }
+    public int HttpPort { get; } = GetAvailablePort(ProtocolType.Tcp, settings, logger);
+    public int OscReceivePort { get; } = GetAvailablePort(ProtocolType.Udp,  settings, logger);
     private string LatestClient { get; set; } = string.Empty;
 
 
-    public event Func<VRChatConnectionInfo, CancellationToken, Task> OnVrchatClientFound { add => _onVrchatClientFoundEvent.Add(value); remove => _onVrchatClientFoundEvent.Remove(value); }
-    private readonly AsyncEvent<Func<VRChatConnectionInfo, CancellationToken, Task>> _onVrchatClientFoundEvent = new();
-
-    public OscQueryService(ILogger<OscQueryService> logger, HostInfoHttpServer httpServer, Multicaster multicaster, Settings settings, VRChatDataFetcher dataFetcher) {
-        _logger = logger;
-        _settings = settings;
-        _httpServer = httpServer;
-        _multicaster = multicaster;
-        _dataFetcher = dataFetcher;
-
-        HttpPort = GetAvailablePort(ProtocolType.Tcp);
-        OscReceivePort = GetAvailablePort(ProtocolType.Udp);
-    }
+    public event Func<VrChatConnectionInfo, CancellationToken, Task> OnVrchatClientFound { add => _onVrchatClientFoundEvent.Add(value); remove => _onVrchatClientFoundEvent.Remove(value); }
+    private readonly AsyncEvent<Func<VrChatConnectionInfo, CancellationToken, Task>> _onVrchatClientFoundEvent = new();
+    
 
     public void Start(CancellationToken token) {
-        _logger.LogStartingOscQueryService();
-        _multicaster.ServiceAnswered += ServiceFound;
+        logger.LogInformation("Starting OscQueryService");
+        multicaster.ServiceAnswered += ServiceFound;
 
-        _httpServer.Start(_settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse, token);
+        httpServer.Start(settings.Address.ToString(), (ushort)HttpPort, HttpServerResponse, token);
 
-        ServiceProfile httpProfile = new(_settings.ServiceName, "_oscjson._tcp", (ushort)HttpPort, [_settings.Address]);
-        ServiceProfile oscProfile = new(_settings.ServiceName, "_osc._udp", (ushort)OscReceivePort, [_settings.Address]);
+        ServiceProfile httpProfile = new(settings.ServiceName, "_oscjson._tcp", (ushort)HttpPort, [settings.Address]);
+        ServiceProfile oscProfile = new(settings.ServiceName, "_osc._udp", (ushort)OscReceivePort, [settings.Address]);
 
-        _multicaster.ServiceAnswered += ServiceFound;
-        _multicaster.Start(httpProfile, oscProfile);
+        multicaster.ServiceAnswered += ServiceFound;
+        multicaster.Start(httpProfile, oscProfile);
     }
 
-    public void Stop() {
-        _logger.LogStoppingOscQueryService();
+    public async Task StopAsync() {
+        logger.LogInformation("Stopping OscQueryService");
 
-        _multicaster.Stop();
-        _multicaster.ServiceAnswered -= ServiceFound;
-        _httpServer.Stop();
+        multicaster.Stop();
+        multicaster.ServiceAnswered -= ServiceFound;
+        await httpServer.StopAsync();
 
         // Reset the latest client to avoid stale connections
         LatestClient = string.Empty;
     }
 
     private string HttpServerResponse(bool hasHostInfo) {
-        if (hasHostInfo) {
-            HostInfo info = new(_settings.ServiceName, _settings.Address, OscReceivePort);
-            return info.ToString();
-        }
+        if (!hasHostInfo)
+            return OscInfo.ToJson();
+        
+        HostInfo info = new(settings.ServiceName, settings.Address, OscReceivePort);
+        return info.ToString();
 
-        return OscInfo.ToJson();
     }
 
     private async Task ServiceFound(AnnouncedService service, CancellationToken token) {
@@ -78,36 +61,24 @@ internal class OscQueryService
 
         LatestClient = service.ServiceId;
 
-        VRChatConnectionInfo connectionInfo = new() {
-            ReceiveEndpoint = new(_settings.Address, OscReceivePort),
-            SendEndpoint = await _dataFetcher.GetConnectionEndpoint(service.Addresses.First(), service.Port),
-            OSCQueryEndpoint = new(service.Addresses.First(), service.Port)
+        var connectionInfo = new VrChatConnectionInfo {
+            ReceiveEndpoint = new IPEndPoint(settings.Address, OscReceivePort),
+            SendEndpoint = await dataFetcher.GetConnectionEndpoint(service.Addresses.First(), service.Port),
+            OscQueryEndpoint = new IPEndPoint(service.Addresses.First(), service.Port)
         };
 
         await _onVrchatClientFoundEvent.InvokeAsync(connectionInfo, token);
     }
 
-    public int GetAvailablePort(ProtocolType type) {
+    private static int GetAvailablePort(ProtocolType type, Settings settings, ILogger<OscQueryService> logger) {
         try {
             using Socket soc = new(AddressFamily.InterNetwork, type == ProtocolType.Udp ? SocketType.Dgram : SocketType.Stream, type);
-            soc.Bind(new IPEndPoint(_settings.Address, 0));
+            soc.Bind(new IPEndPoint(settings.Address, 0));
             return ((IPEndPoint)soc.LocalEndPoint!).Port;
         }
         catch(Exception ex) {
-            _logger.LogAvailablePortError(ex);
+            logger.LogError(ex, "Unable to find open UDP port");
             throw;
         }
     }
-}
-
-
-internal static partial class OscQueryInfoLogger {
-    [LoggerMessage(LogLevel.Information, "Starting OscQueryService")]
-    public static partial void LogStartingOscQueryService(this ILogger<OscQueryService> logger);
-
-    [LoggerMessage(LogLevel.Information, "Stopping OscQueryService")]
-    public static partial void LogStoppingOscQueryService(this ILogger<OscQueryService> logger);
-
-    [LoggerMessage(LogLevel.Error, "Unable to find open UDP port")]
-    public static partial void LogAvailablePortError(this ILogger<OscQueryService> logger, Exception ex);
 }

@@ -1,19 +1,16 @@
 ﻿using Makaretu.Dns;
-using Makaretu.Dns.Resolving;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using VRChatOSCClient.TaskExtensions;
-using VRChatOSCClient.Utilities;
+using static System.String;
 
 namespace VRChatOSCClient.MulticastServices;
 
 /// <summary>
 /// Service that handles multicast DNS service discovery and advertisement
 /// </summary>
-internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
+internal sealed class Multicaster(ILogger<Multicaster> logger) : IDisposable
 {
-    private readonly ILogger<Multicaster> _logger = logger;
-
     private RunningState? _state;
 
     private ServiceProfile[] _profiles = [];
@@ -30,11 +27,11 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
     /// <param name="serviceProfiles">The profiles to advertise</param>
     public void Start(params ServiceProfile[] serviceProfiles) {
         if(_state is not null) {
-            _logger.LogMulticasterAlreadyStarted();
+            logger.LogInformation("Multicaster already started");
             throw new InvalidOperationException("Multicaster is already started");
         }
 
-        _logger.LogMulticasterStarted();
+        logger.LogInformation("Multicaster starting");
 
         var state = new RunningState();
         state.MulticastService.NetworkInterfaceDiscovered += InterfaceDiscovered;
@@ -44,7 +41,7 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
 
         _profiles = serviceProfiles;
 
-        foreach (ServiceProfile profile in _profiles) {
+        foreach (var profile in _profiles) {
             state.ServiceDiscovery.Advertise(profile);
         }
 
@@ -61,9 +58,9 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
             return;
         }
 
-        _logger.LogMulticasterStopped();
+        logger.LogInformation("Multicaster stopping");
 
-        foreach (ServiceProfile profile in _profiles) {
+        foreach (var profile in _profiles) {
             state.ServiceDiscovery.Unadvertise(profile);
         }
 
@@ -71,7 +68,7 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
         state.MulticastService.AnswerReceived -= AnswerReceivedAsync;
 
         state.MulticastService.Stop();
-        state.CTS.Cancel();
+        state.Cts.Cancel();
 
         state.Dispose();
 
@@ -82,102 +79,83 @@ internal class Multicaster(ILogger<Multicaster> logger) : IDisposable
 
     private void InterfaceDiscovered(object? sender, NetworkInterfaceEventArgs args) {
         var state = _state;
-
         if(state is null) {
             return;
         }
 
-        _logger.LogInterfaceDiscovered();
+        logger.LogDebug("Network interface discovered");
 
-        foreach (ServiceProfile profiles in _profiles) {
+        foreach (var profiles in _profiles) {
             state.MulticastService.SendQuery(profiles.QualifiedServiceName);
         }
     }
 
-    private async void AnswerReceivedAsync(object? sender, MessageEventArgs args) {
-        var state = _state;
+    private async void AnswerReceivedAsync(object? sender, MessageEventArgs args)
+    {
+        try
+        {
+            var state = _state;
+            if (state is null) {
+                return;
+            }
 
-        if (state == null) {
-            return;
-        }
+            var records = args.Message.AdditionalRecords.OfType<SRVRecord>();
+            foreach (var record in records) {
+                var domainName = record.Name.Labels;
+                IPAddress[] addresses = [.. args.Message.AdditionalRecords.OfType<ARecord>().Select(aRecord => aRecord.Address)];
 
-        IEnumerable<SRVRecord> records = args.Message.AdditionalRecords.OfType<SRVRecord>();
-        foreach (SRVRecord record in records) {
-            IReadOnlyList<string> domainName = record.Name.Labels;
-            IPAddress[] addresses = [.. args.Message.AdditionalRecords.OfType<ARecord>().Select(record => record.Address)];
-
-            AnnouncedService? srvs = new(
-                ServiceId: $"{record.CanonicalName}:{record.Port}",
-                ServiceName: domainName[0],
-                Addresses: addresses,
-                Port: record.Port,
-                Type: domainName[2]
+                var srvs = new AnnouncedService(
+                    ServiceId: $"{record.CanonicalName}:{record.Port}",
+                    ServiceName: domainName[0],
+                    Addresses: addresses,
+                    Port: record.Port,
+                    Type: domainName[2]
                 );
 
-            _logger.LogInterfaceDiscovered(string.Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug("Service located at: {address}:{port} as {serviceId} {instanceName}", Join(",", srvs.Addresses.Select(addr => addr.ToString())), srvs.Port, srvs.ServiceId, srvs.ServiceName);
+                }
 
-            try {
-                await _serviceAnsweredEvent.InvokeAsync(srvs, state.CTS.Token);
+                try {
+                    await _serviceAnsweredEvent.InvokeAsync(srvs, state.Cts.Token);
+                }
+                catch (Exception ex) { logger.LogError(ex, "Could not handle ServiceAnsweredEvent"); }
             }
-            catch (Exception ex) { _logger.LogServiceAnsweredEventError(ex); }
+        }
+        catch (Exception e)
+        {
+            logger.LogCritical(e, "Critical failure when receiving answer from service");
         }
     }
 
     #region IDisposable Support
     private bool _disposedValue;
 
-    protected virtual void Dispose(bool disposing) {
-        if (!_disposedValue) {
-            if (disposing) {}
-            Stop();
-            _disposedValue = true;
-        }
-    }
-
-    public void Dispose() {
-        // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);
+    public void Dispose()
+    {
+        if (_disposedValue) return;
+        
+        Stop();
+        _disposedValue = true;
     }
     #endregion
 
     private sealed class RunningState : IDisposable {
         public MulticastService MulticastService { get; }
         public ServiceDiscovery ServiceDiscovery { get; }
-        public CancellationTokenSource CTS { get; }
+        public CancellationTokenSource Cts { get; }
 
         public RunningState() {
-            CTS = new CancellationTokenSource();
+            Cts = new CancellationTokenSource();
             MulticastService = new MulticastService { UseIpv6 = false, IgnoreDuplicateMessages = true };
             ServiceDiscovery = new ServiceDiscovery(MulticastService);
         }
 
         public void Dispose() {
-            CTS.Dispose();
+            Cts.Dispose();
             ServiceDiscovery.Dispose();
             MulticastService.Dispose();
         }
     }
-}
-
-
-public static partial class MulticasterLogger
-{
-    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster starting")]
-    public static partial void LogMulticasterStarted(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster already started")]
-    public static partial void LogMulticasterAlreadyStarted(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Multicaster stopping")]
-    public static partial void LogMulticasterStopped(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Network interface discovered")]
-    public static partial void LogInterfaceDiscovered(this ILogger logger);
-
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Service located at: {address}:{port} as {serviceId} {instanceName}")]
-    public static partial void LogInterfaceDiscovered(this ILogger logger, string? address, ushort port, string serviceId, string instanceName);
-
-    [LoggerMessage(Level = LogLevel.Error, Message = "Could not handle ServiceAnsweredEvent")]
-    public static partial void LogServiceAnsweredEventError(this ILogger logger, Exception exception);
 }
