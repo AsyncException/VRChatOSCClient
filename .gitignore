@@ -581,3 +581,4 @@ InitTestScene*.unity*
 /unity/UserSettings
 /unity/Packages
 global.json
+qodana.yaml
