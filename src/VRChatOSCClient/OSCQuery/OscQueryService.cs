@@ -1,6 +1,5 @@
 ﻿using Makaretu.Dns;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using VRChatOSCClient.HttpServer;

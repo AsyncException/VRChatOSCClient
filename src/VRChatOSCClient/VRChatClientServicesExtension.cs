@@ -10,11 +10,11 @@ using VRChatOSCClient.OSCQuery;
 
 namespace VRChatOSCClient;
 
-public static class VRChatClientServicesExtension
+public static class VrChatClientServicesExtension
 {
     extension(IServiceCollection services) {
 
-        public IServiceCollection AddVRChatClient(string serviceName, IPAddress address, ServiceLifetime lifetime = ServiceLifetime.Singleton) {
+        public IServiceCollection AddVrChatClient(string serviceName, IPAddress address, ServiceLifetime lifetime = ServiceLifetime.Singleton) {
             services.AddTransient<Settings>(_ => new Settings(serviceName, address));
             services.AddHttpClient(nameof(VrChatDataFetcher), client => VrChatDataFetcher.ConfigureHttpClient(client, serviceName));
             services.AddTransient<OscQueryService>();
@@ -22,12 +22,12 @@ public static class VRChatClientServicesExtension
             services.AddTransient<HostInfoHttpServer>();
             services.AddTransient<Multicaster>();
             services.AddTransient<OscCommunicator>();
-            services.Add(new ServiceDescriptor(typeof(IVRChatClient), typeof(VRChatClient), lifetime));
+            services.Add(new ServiceDescriptor(typeof(IVrChatClient), typeof(VrChatClient), lifetime));
 
             return services;
         }
 
-        public IServiceCollection AddOpenVRClient(IConfiguration configuration) {
+        public IServiceCollection AddOpenVrClient(IConfiguration configuration) {
             services.Configure<OpenVrWrapperSettings>(configuration);
             services.AddOptions<OpenVrWrapperSettings>();
             services.AddSingleton<OpenVrWrapper>();
@@ -35,7 +35,7 @@ public static class VRChatClientServicesExtension
             return services;
         }
 
-        public IServiceCollection AddOpenVRClient(Action<OpenVrWrapperSettings> settingsFactory) {
+        public IServiceCollection AddOpenVrClient(Action<OpenVrWrapperSettings> settingsFactory) {
             services.Configure<OpenVrWrapperSettings>(settingsFactory);
             services.AddSingleton<OpenVrWrapper>();
 

@@ -2,7 +2,7 @@
 
 internal static class OscInfo {
   
-    private const string Info = """
+    private const string INFO = """
         {
           "DESCRIPTION": "root node",
           "FULL_PATH": "/",
@@ -24,5 +24,5 @@ internal static class OscInfo {
         }
         """;
 
-    public static string ToJson() => Info;
+    public static string ToJson() => INFO;
 }

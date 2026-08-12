@@ -65,9 +65,9 @@ internal static class MessageParser
 
             parameterTypes[i] = arg switch {
                 string => 115, // 'S' for string
-                float f => 102, // 'f' for float
+                float => 102, // 'f' for float
                 int => 105, // 'i' for int
-                bool b => b ? (byte)84 : (byte)70, // 'T' for true, 'F' for false
+                bool b => (byte)(b ? 84 : 70), // 'T' for true, 'F' for false
                 _ => throw new NotImplementedException(), // Should never happen because of the if statment above, but just in case.
             };
         }
@@ -99,13 +99,13 @@ internal static class MessageParser
 
     private static int GetLength(Message message) {
         var addressLength = (Encoding.ASCII.GetByteCount(message.Address) + 4) & ~3;
-        var parameterTypesLength = (message.Arguments.Length + 5) & ~3; ;
+        var parameterTypesLength = (message.Arguments.Length + 5) & ~3;
         var parameterLength = message.Arguments.OfType<object>()
             .Sum(param => param switch
             {
                 string str => (Encoding.ASCII.GetByteCount(str) + 4) & ~3,
-                float f => 4,
-                int i => 4,
+                float => 4,
+                int => 4,
                 _ => 0
             });
 

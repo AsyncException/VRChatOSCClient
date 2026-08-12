@@ -1,5 +1,4 @@
 ﻿using Makaretu.Dns;
-using Makaretu.Dns.Resolving;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using VRChatOSCClient.TaskExtensions;
